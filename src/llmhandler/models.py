@@ -1,0 +1,104 @@
+# File: src/LLMHandler/models.py
+"""
+Data models for LLM Handler.
+"""
+
+from datetime import datetime
+from typing import Any, Dict, List, Optional, TypeVar, Union, Generic
+
+from pydantic import BaseModel, Field
+
+T = TypeVar("T", bound=BaseModel)
+
+class BatchMetadata(BaseModel):
+    """
+    Metadata for batch processing jobs.
+
+    Attributes:
+        batch_id: The unique identifier for the batch.
+        input_file_id: The file ID associated with the batch input.
+        status: The current batch status.
+        created_at: The datetime when batch was created.
+        last_updated: The datetime when batch was last updated.
+        num_requests: Number of requests/prompts in this batch.
+        error: Any error message if batch failed.
+        output_file_path: Path to the output file containing results.
+    """
+    batch_id: str
+    input_file_id: str
+    status: str
+    created_at: datetime
+    last_updated: datetime
+    num_requests: int
+    error: Optional[str] = None
+    output_file_path: Optional[str] = None
+
+
+class BatchResult(BaseModel):
+    """
+    Results from batch processing.
+
+    Attributes:
+        metadata: Information about the batch.
+        results: List of results for each prompt.
+    """
+    metadata: BatchMetadata
+    results: List[Dict[str, Any]]
+
+
+class SimpleResponse(BaseModel):
+    """
+    Simple response model for testing.
+
+    Attributes:
+        content: The textual response content.
+        confidence: Confidence level in [0,1].
+    """
+    content: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
+class MathResponse(BaseModel):
+    """
+    Response model for math problems.
+
+    Attributes:
+        answer: The numeric answer.
+        reasoning: Explanation for the solution.
+        confidence: Confidence level in [0,1].
+    """
+    answer: Optional[float] = None
+    reasoning: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
+class PersonResponse(BaseModel):
+    """
+    Response model for person descriptions.
+
+    Attributes:
+        name: Person's name.
+        age: Person's age (0-150).
+        occupation: The person's occupation.
+        skills: A list of skill strings.
+    """
+    name: Optional[str] = None
+    age: Optional[int] = Field(None, ge=0, le=150)
+    occupation: Optional[str] = None
+    skills: Optional[List[str]] = None
+
+
+class UnifiedResponse(BaseModel, Generic[T]):
+    """
+    A unified response envelope for all LLM responses.
+
+    Attributes:
+        success: Whether the request was successful.
+        data: The typed data or a list of typed data, or a BatchResult.
+        error: Error message if success=False.
+        original_prompt: The original prompt for reference.
+    """
+    success: bool
+    data: Optional[Union[T, List[T], BatchResult]] = None
+    error: Optional[str] = None
+    original_prompt: Optional[str] = None

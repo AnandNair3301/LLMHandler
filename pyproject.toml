@@ -1,0 +1,29 @@
+[project]
+name = "LLMHandler"
+version = "0.1.0"
+description = "x"
+authors = [
+    {name = "Bryan Nsoh", email = "bryan.anye.5@gmail.com"},
+]
+dependencies = ["pydantic>=2.10.6", "aiolimiter>=1.2.1", "pydantic-ai>=0.0.20", "loguru>=0.7.3", "python-dotenv>=1.0.1"]
+requires-python = ">=3.13"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+    "isort>=6.0.0",
+    "flake8>=7.1.1",
+    "pytest>=8.3.4",
+    "loguru>=0.7.3",
+    "pytest-asyncio>=0.25.3",
+]
