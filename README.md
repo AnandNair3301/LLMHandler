@@ -50,7 +50,7 @@ LLMHandler unifies access to various LLM providers by letting you specify a mode
 
 ### Requirements
 
-- Python **3.13** or later
+- Python **3.9** or later
 
 ### Using PDM
 

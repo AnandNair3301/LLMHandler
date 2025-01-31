@@ -1,5 +1,5 @@
 [project]
-name = "llmhandler"
+name = "llm_handler_validator"
 version = "0.1.0"
 description = "LLMHandler is a unified Python package that provides a single, consistent interface for interacting with multiple LLM providers, offering both structured (typed) and unstructured responses."
 authors = [
