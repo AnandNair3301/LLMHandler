@@ -1,25 +1,29 @@
-# File: src/LLMHandler/api_handler.py
-"""
-Core module for handling LLM prompts and responses in LLMHandler.
-"""
-
 import os
 import json
 import asyncio
 import traceback
-from pathlib import Path
-from typing import Any, List, Optional, Sequence, Type, Union
-
 from datetime import datetime
-from dotenv import load_dotenv
-from loguru import logger
-from aiolimiter import AsyncLimiter
-from pydantic import BaseModel
+from pathlib import Path
+from typing import (
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Type,
+    TypeVar,
+    Union,
+    Generic,
+)
 
-# Load .env file if present, overriding existing environment variables
+from dotenv import load_dotenv
+# Load .env (override any pre-existing environment variables with what's in .env)
 load_dotenv(override=True)
 
-# pydantic_ai imports
+import logfire
+from aiolimiter import AsyncLimiter
+from pydantic import BaseModel, Field
+
+# Core Pydantic AI
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIModel
@@ -28,32 +32,72 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.models.vertexai import VertexAIModel
 from pydantic_ai.exceptions import UserError
 
-# Local models
-from .models import (
-    BatchMetadata,
-    BatchResult,
-    UnifiedResponse,
-    T,
-)
+# Configure logfire (optional)
+logfire.configure(send_to_logfire="if-token-present")
 
+T = TypeVar("T", bound=BaseModel)
+
+# ----------------------------------------------------------------------------
+# Response Models
+# ----------------------------------------------------------------------------
+
+class BatchMetadata(BaseModel):
+    """Metadata for batch processing jobs."""
+    batch_id: str
+    input_file_id: str
+    status: str
+    created_at: datetime
+    last_updated: datetime
+    num_requests: int
+    error: Optional[str] = None
+    output_file_path: Optional[str] = None
+
+
+class BatchResult(BaseModel):
+    """Results from batch processing."""
+    metadata: BatchMetadata
+    results: List[Dict[str, Union[str, BaseModel]]]
+
+
+class SimpleResponse(BaseModel):
+    """Simple response model for testing."""
+    content: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
+class MathResponse(BaseModel):
+    """Response model for math problems."""
+    answer: Optional[float] = None
+    reasoning: Optional[str] = None
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
+class PersonResponse(BaseModel):
+    """Response model for person descriptions."""
+    name: Optional[str] = None
+    age: Optional[int] = Field(None, ge=0, le=150)
+    occupation: Optional[str] = None
+    skills: Optional[List[str]] = None
+
+
+class UnifiedResponse(BaseModel, Generic[T]):
+    """A unified response envelope."""
+    success: bool
+    data: Optional[Union[T, List[T], BatchResult]] = None
+    error: Optional[str] = None
+    original_prompt: Optional[str] = None
+
+# ----------------------------------------------------------------------------
+# Handler Class
+# ----------------------------------------------------------------------------
 
 class UnifiedLLMHandler:
     """
-    A unified handler for processing single or multiple prompts with typed responses.
+    A unified handler for processing single or multiple prompts with typed responses,
+    optional batch mode, and multiple LLM providers.
 
-    This class supports:
-      - Multiple providers via 'provider:model_name' notation (e.g., 'openai:gpt-4o-mini').
-      - Batch mode (only for OpenAI models).
-      - Optional rate limiting.
-
-    Attributes:
-        rate_limiter: An optional AsyncLimiter for request throttling.
-        batch_output_dir: Directory for saving batch output JSONL files.
-        openai_api_key: OpenAI API key (defaults to env var OPENAI_API_KEY).
-        openrouter_api_key: OpenRouter API key (defaults to env var OPENROUTER_API_KEY).
-        deepseek_api_key: DeepSeek API key (defaults to env var DEEPSEEK_API_KEY).
-        anthropic_api_key: Anthropic API key (defaults to env var ANTHROPIC_API_KEY).
-        gemini_api_key: Gemini API key (defaults to env var GEMINI_API_KEY).
+    The user MUST pass provider: in the model string (e.g. 'openai:gpt-4'),
+    or we raise an error. This eliminates ambiguous model name guessing.
     """
 
     def __init__(
@@ -65,19 +109,15 @@ class UnifiedLLMHandler:
         deepseek_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
-    ) -> None:
+    ):
         """
-        Initializes a UnifiedLLMHandler instance.
-
-        Args:
-            requests_per_minute: Maximum number of requests per minute. If provided,
-                requests are rate-limited.
-            batch_output_dir: Directory for saving OpenAI batch output.
-            openai_api_key: Override for the OpenAI API key.
-            openrouter_api_key: Override for the OpenRouter API key.
-            deepseek_api_key: Override for the DeepSeek API key.
-            anthropic_api_key: Override for the Anthropic API key.
-            gemini_api_key: Override for the Gemini API key.
+        :param requests_per_minute: If specified, uses an AsyncLimiter to throttle requests.
+        :param batch_output_dir: Directory for saving batch output JSONL.
+        :param openai_api_key: OpenAI API key override (falls back to OPENAI_API_KEY if None).
+        :param openrouter_api_key: OpenRouter API key override (falls back to OPENROUTER_API_KEY).
+        :param deepseek_api_key: DeepSeek API key override (falls back to DEEPSEEK_API_KEY).
+        :param anthropic_api_key: Anthropic API key override (falls back to ANTHROPIC_API_KEY).
+        :param gemini_api_key: Gemini API key override (falls back to GEMINI_API_KEY).
         """
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.openrouter_api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
@@ -93,21 +133,14 @@ class UnifiedLLMHandler:
 
     def _build_model_instance(self, model_str: str) -> Model:
         """
-        Parses the provider/model string and returns a pydantic_ai Model instance.
-
-        Args:
-            model_str: A string of the form 'provider:model_name', e.g. 'openai:gpt-4o-mini'.
-
-        Returns:
-            A Model instance configured with the correct provider and model name.
-
-        Raises:
-            UserError: If the model string is invalid or if required API keys are missing.
+        If model_str is not prefixed with a recognized provider, raise an error.
+        Otherwise, build and return the correct pydantic_ai model instance.
         """
         if ":" not in model_str:
             raise UserError(
-                "Model string must have the form 'provider:model_name', "
-                "e.g. 'openai:gpt-4o-mini', 'anthropic:claude-2', etc."
+                "Model string must start with a recognized prefix, "
+                "e.g. 'openai:gpt-4', 'openrouter:some_model', "
+                "'deepseek:deepseek-chat', 'anthropic:some_claude', etc."
             )
 
         provider, real_model_name = model_str.split(":", 1)
@@ -116,10 +149,10 @@ class UnifiedLLMHandler:
 
         if provider == "openai":
             if not self.openai_api_key:
-                raise UserError("No OpenAI API key set.")
+                raise UserError("No OpenAI API key set. Provide openai_api_key= or set OPENAI_API_KEY.")
             return OpenAIModel(real_model_name, api_key=self.openai_api_key)
 
-        if provider == "openrouter":
+        elif provider == "openrouter":
             if not self.openrouter_api_key:
                 raise UserError("No OpenRouter API key set.")
             return OpenAIModel(
@@ -128,7 +161,7 @@ class UnifiedLLMHandler:
                 api_key=self.openrouter_api_key,
             )
 
-        if provider == "deepseek":
+        elif provider == "deepseek":
             if not self.deepseek_api_key:
                 raise UserError("No DeepSeek API key set.")
             return OpenAIModel(
@@ -137,271 +170,227 @@ class UnifiedLLMHandler:
                 api_key=self.deepseek_api_key,
             )
 
-        if provider == "anthropic":
+        elif provider == "anthropic":
             if not self.anthropic_api_key:
                 raise UserError("No Anthropic API key set.")
             return AnthropicModel(real_model_name, api_key=self.anthropic_api_key)
 
-        if provider == "gemini":
+        elif provider == "gemini":
             if not self.gemini_api_key:
                 raise UserError("No Gemini API key set.")
             return GeminiModel(real_model_name, api_key=self.gemini_api_key)
 
-        if provider == "vertexai":
+        elif provider == "vertexai":
             return VertexAIModel(real_model_name)
 
-        raise UserError(
-            f"Unrecognized provider prefix: {provider}. "
-            "Must be one of: openai, openrouter, deepseek, anthropic, gemini, vertexai."
-        )
+        else:
+            raise UserError(
+                f"Unrecognized provider prefix: {provider}. "
+                f"Must be one of: openai, openrouter, deepseek, anthropic, gemini, vertexai."
+            )
 
     async def process(
         self,
         prompts: Union[str, List[str]],
         model: str,
-        response_type: Type[BaseModel],
+        response_type: Type[T],
         *,
         system_message: Union[str, Sequence[str]] = (),
         batch_size: int = 1000,
         batch_mode: bool = False,
         retries: int = 1,
-    ) -> UnifiedResponse[Any]:
+    ) -> UnifiedResponse[Union[T, List[T], BatchResult]]:
         """
-        Processes user prompts with a specified model, returning typed responses.
+        Main entry point for processing user prompts with typed responses.
 
-        Args:
-            prompts: A single prompt or a list of prompts to process.
-            model: 'provider:model_name' (e.g. 'openai:gpt-4o-mini').
-            response_type: The Pydantic model class to parse responses into.
-            system_message: Optional system message(s) to guide the model.
-            batch_size: Number of prompts to process concurrently (for multiple prompts).
-            batch_mode: If True, uses the OpenAI batch API (only for 'openai:' models).
-            retries: How many times to retry if the model call fails.
-
-        Returns:
-            A UnifiedResponse containing either a single typed response,
-            multiple typed responses, or a BatchResult for batch mode.
-
-        Raises:
-            UserError: If prompts are invalid or if batch_mode is used incorrectly.
-            Exception: For any unexpected errors.
+        :param prompts: The prompt or list of prompts.
+        :param model: Must be "provider:model_name", e.g. "openai:gpt-4".
+        :param response_type: A pydantic BaseModel for typed responses.
+        :param system_message: Optional system message(s) to guide the model.
+        :param batch_size: If multiple prompts are provided, process them in chunks.
+        :param batch_mode: If True, uses the OpenAI batch API (only for openai: models).
+        :param retries: Number of times to retry on certain exceptions.
         """
-        logger.debug(
-            "Starting process() with model='{}', batch_mode={}, number_of_prompts={}",
-            model,
-            batch_mode,
-            len(prompts) if isinstance(prompts, list) else 1
-        )
-
-        original_prompt_for_error: Optional[str] = None
-        if isinstance(prompts, str):
-            original_prompt_for_error = prompts
-        elif isinstance(prompts, list) and prompts:
-            original_prompt_for_error = prompts[0]
-
-        try:
-            if not prompts:
-                raise UserError("Prompts cannot be empty or None.")
-
-            model_instance = self._build_model_instance(model)
-            agent = Agent(
-                model_instance,
-                result_type=response_type,
-                system_prompt=system_message,
-                retries=retries,
+        with logfire.span("llm_processing"):
+            logfire.log(
+                "debug",
+                "Starting process() with LLM prompts",
+                attributes={
+                    "model": model,
+                    "batch_mode": batch_mode,
+                    "prompt_count": len(prompts) if isinstance(prompts, list) else 1,
+                },
             )
 
-            if batch_mode:
-                # Only openai: supports batch API
-                if not isinstance(model_instance, OpenAIModel):
-                    raise UserError("Batch API mode is only supported for openai: models.")
-                batch_result = await self._process_batch(agent, prompts, response_type)
-                logger.debug("Batch mode processing completed successfully.")
-                return UnifiedResponse(success=True, data=batch_result)
-
+            original_prompt_for_error: Optional[str] = None
             if isinstance(prompts, str):
-                single_res = await self._process_single(agent, prompts)
-                logger.debug("Single prompt processed successfully.")
-                return UnifiedResponse(success=True, data=single_res)
+                original_prompt_for_error = prompts
+            elif isinstance(prompts, list) and prompts:
+                original_prompt_for_error = prompts[0]
 
-            # Otherwise, prompts is a list
-            multi_res = await self._process_multiple(agent, prompts, batch_size)
-            logger.debug("Multiple prompts processed successfully. results_count={}", len(multi_res))
-            return UnifiedResponse(success=True, data=multi_res)
+            try:
+                if prompts is None:
+                    raise UserError("Prompts cannot be None.")
+                if isinstance(prompts, list) and len(prompts) == 0:
+                    raise UserError("Prompts list cannot be empty.")
 
-        except UserError as exc:
-            full_trace = traceback.format_exc()
-            error_msg = f"UserError: {exc}\nFull Traceback:\n{full_trace}"
-            logger.error(error_msg)
-            return UnifiedResponse(
-                success=False,
-                error=error_msg,
-                original_prompt=original_prompt_for_error,
-            )
-        except Exception as exc:
-            full_trace = traceback.format_exc()
-            error_msg = f"Unexpected error: {exc}\nFull Traceback:\n{full_trace}"
-            logger.exception(error_msg)
-            return UnifiedResponse(
-                success=False,
-                error=error_msg,
-                original_prompt=original_prompt_for_error,
-            )
+                model_instance = self._build_model_instance(model)
+                agent = Agent(
+                    model_instance,
+                    result_type=response_type,
+                    system_prompt=system_message,
+                    retries=retries,
+                )
 
-    async def _process_single(self, agent: Agent, prompt: str) -> BaseModel:
+                if batch_mode:
+                    if not isinstance(model_instance, OpenAIModel):
+                        # Raise so tests can catch with pytest.raises(UserError)
+                        raise UserError("Batch API mode is only supported for openai:* models.")
+                    batch_result = await self._process_batch(agent, prompts, response_type)
+                    return UnifiedResponse(success=True, data=batch_result)
+
+                if isinstance(prompts, str):
+                    data = await self._process_single(agent, prompts)
+                    return UnifiedResponse(success=True, data=data)
+
+                # Otherwise, prompts is a list
+                data = await self._process_multiple(agent, prompts, batch_size)
+                return UnifiedResponse(success=True, data=data)
+
+            except UserError as exc:
+                # RE-RAISE so that tests with pytest.raises(UserError) succeed!
+                logfire.log("error", "Caught user error", attributes={"error": str(exc)})
+                raise
+            except Exception as exc:
+                # For any other exception, we return a UnifiedResponse with error
+                full_trace = traceback.format_exc()
+                error_msg = f"Unexpected error: {exc}\nFull Traceback:\n{full_trace}"
+                with logfire.span("error_handling", error=str(exc), error_type="unexpected_error"):
+                    logfire.log("error", "Caught unexpected error", attributes={"trace": error_msg})
+
+                return UnifiedResponse(
+                    success=False,
+                    error=error_msg,
+                    original_prompt=original_prompt_for_error,
+                )
+
+    async def _process_single(self, agent: Agent, prompt: str) -> T:
         """
-        Processes a single prompt with optional rate limiting.
-
-        Args:
-            agent: The configured Agent instance.
-            prompt: A single prompt to send to the model.
-
-        Returns:
-            The typed response from the model.
+        Process a single prompt with optional rate limiting.
         """
-        logger.debug("Processing single prompt: {}", prompt)
-        if self.rate_limiter:
-            async with self.rate_limiter:
-                res = await agent.run(prompt)
-        else:
-            res = await agent.run(prompt)
-        return res.data
+        with logfire.span("process_single"):
+            logfire.log("debug", "Processing single prompt", attributes={"prompt": prompt})
+            if self.rate_limiter:
+                async with self.rate_limiter:
+                    result = await agent.run(prompt)
+            else:
+                result = await agent.run(prompt)
+            return result.data
 
     async def _process_multiple(
-        self,
-        agent: Agent,
-        prompts: List[str],
-        batch_size: int
-    ) -> List[BaseModel]:
+        self, agent: Agent, prompts: List[str], batch_size: int
+    ) -> List[T]:
         """
-        Processes multiple prompts concurrently, in batches of size `batch_size`.
-
-        Args:
-            agent: The configured Agent instance.
-            prompts: A list of user prompts.
-            batch_size: The number of prompts to process in each chunk.
-
-        Returns:
-            A list of typed responses, one per prompt.
+        Process multiple prompts in chunks using asyncio.gather for concurrency.
         """
-        logger.debug("Processing multiple prompts in batches of {}", batch_size)
-        results: List[BaseModel] = []
-        for i in range(0, len(prompts), batch_size):
-            batch = prompts[i : i + batch_size]
+        with logfire.span("process_multiple"):
+            logfire.log("debug", "Processing multiple prompts", attributes={"batch_size": batch_size})
+            results: List[T] = []
+            for i in range(0, len(prompts), batch_size):
+                batch = prompts[i : i + batch_size]
 
-            async def process_prompt(p: str) -> BaseModel:
-                if self.rate_limiter:
-                    async with self.rate_limiter:
+                async def process_prompt(p: str) -> T:
+                    if self.rate_limiter:
+                        async with self.rate_limiter:
+                            res = await agent.run(p)
+                    else:
                         res = await agent.run(p)
-                else:
-                    res = await agent.run(p)
-                return res.data
+                    return res.data
 
-            batch_results = await asyncio.gather(*(process_prompt(p) for p in batch))
-            results.extend(batch_results)
-        return results
+                batch_results = await asyncio.gather(*(process_prompt(p) for p in batch))
+                results.extend(batch_results)
+            return results
 
     async def _process_batch(
-        self,
-        agent: Agent,
-        prompts: List[str],
-        response_type: Type[BaseModel]
+        self, agent: Agent, prompts: List[str], response_type: Type[T]
     ) -> BatchResult:
         """
-        Executes the OpenAI batch API workflow for multiple prompts.
-
-        Args:
-            agent: The configured Agent instance (OpenAIModel).
-            prompts: A list of user prompts to be processed via batch API.
-            response_type: The Pydantic model to parse batch responses into.
-
-        Returns:
-            A BatchResult object containing batch metadata and responses.
-
-        Raises:
-            Exception: If the batch fails unexpectedly.
+        Specialized method for the OpenAI Batch API workflow.
+        Writes JSONL, uploads to OpenAI, polls for completion,
+        and returns a BatchResult with typed responses.
         """
-        logger.debug("Initiating batch processing for {} prompts.", len(prompts))
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        batch_file = self.batch_output_dir / f"batch_{timestamp}.jsonl"
+        with logfire.span("process_batch"):
+            logfire.log("debug", "Initiating batch processing", attributes={"num_prompts": len(prompts)})
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            batch_file = self.batch_output_dir / f"batch_{timestamp}.jsonl"
 
-        # Write prompts to JSONL
-        with batch_file.open("w", encoding="utf-8") as file_obj:
-            for i, prompt in enumerate(prompts):
-                request_data = {
-                    "custom_id": f"req_{i}",
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "model": agent.model.model_name,
-                        "messages": [{"role": "user", "content": prompt}],
-                    },
-                }
-                file_obj.write(json.dumps(request_data) + "\n")
+            with batch_file.open("w", encoding="utf-8") as f:
+                for i, prompt in enumerate(prompts):
+                    request_data = {
+                        "custom_id": f"req_{i}",
+                        "method": "POST",
+                        "url": "/v1/chat/completions",
+                        "body": {
+                            "model": agent.model.model_name,
+                            "messages": [{"role": "user", "content": prompt}],
+                        },
+                    }
+                    f.write(json.dumps(request_data) + "\n")
 
-        # Upload and create the batch job
-        logger.debug("Uploading batch file '{}' to OpenAI.", batch_file)
-        batch_upload = await agent.model.client.files.create(
-            file=batch_file.open("rb"), purpose="batch"
-        )
-        batch = await agent.model.client.batches.create(
-            input_file_id=batch_upload.id,
-            endpoint="/v1/chat/completions",
-            completion_window="24h",
-        )
+            batch_upload = await agent.model.client.files.create(
+                file=batch_file.open("rb"), purpose="batch"
+            )
+            batch = await agent.model.client.batches.create(
+                input_file_id=batch_upload.id,
+                endpoint="/v1/chat/completions",
+                completion_window="24h",
+            )
 
-        metadata = BatchMetadata(
-            batch_id=batch.id,
-            input_file_id=batch_upload.id,
-            status="in_progress",
-            created_at=datetime.now(),
-            last_updated=datetime.now(),
-            num_requests=len(prompts),
-        )
+            metadata = BatchMetadata(
+                batch_id=batch.id,
+                input_file_id=batch_upload.id,
+                status="in_progress",
+                created_at=datetime.now(),
+                last_updated=datetime.now(),
+                num_requests=len(prompts),
+            )
 
-        # Poll until batch completes or fails
-        while True:
-            status = await agent.model.client.batches.retrieve(batch.id)
-            metadata.status = status.status
-            metadata.last_updated = datetime.now()
+            while True:
+                status = await agent.model.client.batches.retrieve(batch.id)
+                metadata.status = status.status
+                metadata.last_updated = datetime.now()
 
-            if status.status == "completed":
-                logger.debug("Batch '{}' completed successfully.", batch.id)
-                break
-            if status.status in ["failed", "canceled"]:
-                logger.error("Batch failed or canceled with status: {}", status.status)
-                metadata.error = f"Batch failed with status: {status.status}"
-                return BatchResult(metadata=metadata, results=[])
+                if status.status == "completed":
+                    logfire.log("debug", "Batch completed successfully", attributes={"batch_id": batch.id})
+                    break
+                elif status.status in ["failed", "canceled"]:
+                    metadata.error = f"Batch failed with status: {status.status}"
+                    logfire.log("error", "Batch ended in failure/canceled", attributes={"batch_id": batch.id, "status": status.status})
+                    return BatchResult(metadata=metadata, results=[])
 
-            await asyncio.sleep(10)
+                await asyncio.sleep(10)
 
-        # Download results
-        output_file = self.batch_output_dir / f"batch_{batch.id}_results.jsonl"
-        result_content = await agent.model.client.files.content(status.output_file_id)
-        with output_file.open("wb") as out_f:
-            out_f.write(result_content.content)
-        metadata.output_file_path = str(output_file)
+            output_file = self.batch_output_dir / f"batch_{batch.id}_results.jsonl"
+            result_content = await agent.model.client.files.content(status.output_file_id)
+            with output_file.open("wb") as out_f:
+                out_f.write(result_content.content)
+            metadata.output_file_path = str(output_file)
 
-        logger.debug("Reading batch results from '{}'.", output_file)
-        results_list = []
-        with output_file.open("r", encoding="utf-8") as res_f:
-            for line, prompt_text in zip(res_f, prompts):
-                data = json.loads(line)
-                try:
-                    content = data["response"]["body"]["choices"][0]["message"]["content"]
-                    resp_obj = response_type.construct()
-                    # Fill "content" if present in the response model
-                    if hasattr(resp_obj, "content"):
-                        setattr(resp_obj, "content", content)
-                    # Fill "confidence" if present in the response model
-                    if hasattr(resp_obj, "confidence"):
-                        setattr(resp_obj, "confidence", 0.95)
-                    results_list.append({"prompt": prompt_text, "response": resp_obj})
-                except Exception as exc:
-                    full_trace = traceback.format_exc()
-                    error_msg = f"Unexpected error: {exc}\nFull Traceback:\n{full_trace}"
-                    logger.exception(error_msg)
-                    results_list.append({"prompt": prompt_text, "error": error_msg})
+            results: List[Dict[str, Union[str, BaseModel]]] = []
+            with output_file.open("r", encoding="utf-8") as f:
+                for line, prompt_text in zip(f, prompts):
+                    data = json.loads(line)
+                    try:
+                        content = data["response"]["body"]["choices"][0]["message"]["content"]
+                        r = response_type.construct()
+                        if "content" in response_type.model_fields:
+                            setattr(r, "content", content)
+                        if "confidence" in response_type.model_fields:
+                            setattr(r, "confidence", 0.95)
+                        results.append({"prompt": prompt_text, "response": r})
+                    except Exception as e:
+                        full_trace = traceback.format_exc()
+                        error_msg = f"Unexpected error: {e}\nFull Traceback:\n{full_trace}"
+                        results.append({"prompt": prompt_text, "error": error_msg})
 
-        logger.debug("Batch processing complete with {} results.", len(results_list))
-        return BatchResult(metadata=metadata, results=results_list)
+            return BatchResult(metadata=metadata, results=results)

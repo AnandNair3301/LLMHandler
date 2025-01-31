@@ -1,4 +1,4 @@
 # File: tests/__init__.py
 """
-Tests for LLMHandler package.
+Tests for llmhandler package.
 """

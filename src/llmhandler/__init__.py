@@ -1,6 +1,8 @@
-# File: src/LLMHandler/__init__.py
 """
-Top-level package for LLMHandler.
+Package init for llmhandler.
+
+Exports:
+    UnifiedLLMHandler
 """
 
 from .api_handler import UnifiedLLMHandler

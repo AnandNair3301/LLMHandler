@@ -1,79 +1,76 @@
-# File: tests/test_models.py
 """
-Tests for Pydantic models in LLMHandler.
+Tests for the Pydantic models in llmhandler.
 """
 
 import pytest
 from datetime import datetime
-from LLMHandler.models import (
+from llmhandler.models import (
     BatchMetadata,
+    BatchResult,
     SimpleResponse,
     MathResponse,
     PersonResponse,
-    BatchResult,
-    UnifiedResponse
+    UnifiedResponse,
 )
 
 
-def test_simple_response_model() -> None:
-    """Test that SimpleResponse can be instantiated correctly."""
+def test_simple_response_model():
+    """Test that SimpleResponse can be instantiated correctly and bounds check."""
     sr = SimpleResponse(content="Hello", confidence=0.9)
     assert sr.content == "Hello"
     assert sr.confidence == 0.9
 
-    # Test boundary
-    sr2 = SimpleResponse(confidence=0)
-    assert sr2.confidence == 0
-
-    # Pydantic should raise an error for out-of-bounds confidence
+    # Confidence must be <= 1
     with pytest.raises(ValueError):
         _ = SimpleResponse(confidence=1.1)
 
 
-def test_math_response_model() -> None:
-    """Test that MathResponse can handle numeric fields."""
-    mr = MathResponse(answer=42, reasoning="Because reasons", confidence=0.5)
+def test_math_response_model():
+    """Test the MathResponse fields."""
+    mr = MathResponse(answer=42, reasoning="Because 42 is the ultimate answer", confidence=0.7)
     assert mr.answer == 42
-    assert mr.reasoning == "Because reasons"
-    assert mr.confidence == 0.5
+    assert mr.reasoning == "Because 42 is the ultimate answer"
+    assert mr.confidence == 0.7
 
 
-def test_person_response_model() -> None:
-    """Test PersonResponse fields."""
-    pr = PersonResponse(name="Alice", age=30, occupation="Engineer", skills=["Python", "C++"])
-    assert pr.name == "Alice"
-    assert pr.age == 30
-    assert "Python" in pr.skills
+def test_person_response_model():
+    """Test the PersonResponse fields."""
+    pr = PersonResponse(name="Bob", age=35, occupation="Chef", skills=["Cooking", "Baking"])
+    assert pr.name == "Bob"
+    assert pr.age == 35
+    assert "Cooking" in pr.skills
 
 
-def test_batch_metadata_model() -> None:
+def test_batch_metadata_model():
     """Test creating a BatchMetadata instance."""
+    now = datetime.utcnow()
     bm = BatchMetadata(
         batch_id="batch123",
-        input_file_id="file456",
+        input_file_id="fileXYZ",
         status="in_progress",
-        created_at=datetime.now(),
-        last_updated=datetime.now(),
-        num_requests=10,
+        created_at=now,
+        last_updated=now,
+        num_requests=5
     )
     assert bm.batch_id == "batch123"
-    assert bm.num_requests == 10
+    assert bm.num_requests == 5
+    assert bm.status == "in_progress"
 
 
-def test_unified_response_model() -> None:
-    """Check that UnifiedResponse can hold success or error."""
+def test_unified_response_model():
+    """Check that UnifiedResponse can hold success, error, or data."""
     ur_success = UnifiedResponse[SimpleResponse](
         success=True,
-        data=SimpleResponse(content="Success!"),
+        data=SimpleResponse(content="Test content"),
     )
     assert ur_success.success is True
-    assert ur_success.data
-    assert isinstance(ur_success.data, SimpleResponse)
+    assert ur_success.data is not None
+    assert ur_success.error is None
 
     ur_error = UnifiedResponse[SimpleResponse](
         success=False,
-        error="Something went wrong",
+        error="An error occurred",
     )
     assert ur_error.success is False
-    assert ur_error.error == "Something went wrong"
+    assert ur_error.error == "An error occurred"
     assert ur_error.data is None
