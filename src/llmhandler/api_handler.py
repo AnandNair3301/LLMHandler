@@ -49,6 +49,19 @@ logfire.configure(send_to_logfire="if-token-present")
 T = TypeVar("T", bound=BaseModel)
 
 
+def _json_schema_instructions(response_type: Type[BaseModel]) -> str:
+    """
+    Generate a short system message instructing the model to reply with
+    valid JSON that matches the given Pydantic model schema.
+    """
+    schema_str = response_type.model_json_schema()
+    return (
+        "Please respond exclusively in valid JSON that matches this schema:\n"
+        f"{schema_str}\n\n"
+        "Do not include extra keys or text outside the JSON."
+    )
+
+
 class UnifiedLLMHandler:
     """
     A unified handler for processing single or multiple prompts with typed responses,
@@ -194,6 +207,14 @@ class UnifiedLLMHandler:
                     raise UserError("Prompt cannot be an empty string.")
                 if isinstance(prompts, list) and len(prompts) == 0:
                     raise UserError("Prompts list cannot be empty.")
+
+                # 1) Auto-generate JSON schema instructions and append to system_message
+                schema_instructions = _json_schema_instructions(response_type)
+                if isinstance(system_message, str):
+                    system_message = [system_message, schema_instructions]
+                else:
+                    system_message = list(system_message)
+                    system_message.append(schema_instructions)
 
                 model_instance = self._build_model_instance(model)
                 agent = Agent(
