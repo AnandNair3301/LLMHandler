@@ -16,6 +16,7 @@ from typing import (
 )
 
 from dotenv import load_dotenv
+
 # Load .env (override any pre-existing environment variables with what's in .env)
 load_dotenv(override=True)
 
@@ -32,64 +33,21 @@ from pydantic_ai.models.gemini import GeminiModel
 from pydantic_ai.models.vertexai import VertexAIModel
 from pydantic_ai.exceptions import UserError
 
+# Import your shared data models from models.py
+from .models import (
+    BatchMetadata,
+    BatchResult,
+    SimpleResponse,
+    MathResponse,
+    PersonResponse,
+    UnifiedResponse,
+)
+
 # Configure logfire (optional)
 logfire.configure(send_to_logfire="if-token-present")
 
 T = TypeVar("T", bound=BaseModel)
 
-# ----------------------------------------------------------------------------
-# Response Models
-# ----------------------------------------------------------------------------
-
-class BatchMetadata(BaseModel):
-    """Metadata for batch processing jobs."""
-    batch_id: str
-    input_file_id: str
-    status: str
-    created_at: datetime
-    last_updated: datetime
-    num_requests: int
-    error: Optional[str] = None
-    output_file_path: Optional[str] = None
-
-
-class BatchResult(BaseModel):
-    """Results from batch processing."""
-    metadata: BatchMetadata
-    results: List[Dict[str, Union[str, BaseModel]]]
-
-
-class SimpleResponse(BaseModel):
-    """Simple response model for testing."""
-    content: Optional[str] = None
-    confidence: Optional[float] = Field(None, ge=0, le=1)
-
-
-class MathResponse(BaseModel):
-    """Response model for math problems."""
-    answer: Optional[float] = None
-    reasoning: Optional[str] = None
-    confidence: Optional[float] = Field(None, ge=0, le=1)
-
-
-class PersonResponse(BaseModel):
-    """Response model for person descriptions."""
-    name: Optional[str] = None
-    age: Optional[int] = Field(None, ge=0, le=150)
-    occupation: Optional[str] = None
-    skills: Optional[List[str]] = None
-
-
-class UnifiedResponse(BaseModel, Generic[T]):
-    """A unified response envelope."""
-    success: bool
-    data: Optional[Union[T, List[T], BatchResult]] = None
-    error: Optional[str] = None
-    original_prompt: Optional[str] = None
-
-# ----------------------------------------------------------------------------
-# Handler Class
-# ----------------------------------------------------------------------------
 
 class UnifiedLLMHandler:
     """
@@ -222,6 +180,7 @@ class UnifiedLLMHandler:
                 },
             )
 
+            # Keep track of the first prompt for error reporting
             original_prompt_for_error: Optional[str] = None
             if isinstance(prompts, str):
                 original_prompt_for_error = prompts
@@ -231,6 +190,8 @@ class UnifiedLLMHandler:
             try:
                 if prompts is None:
                     raise UserError("Prompts cannot be None.")
+                if isinstance(prompts, str) and not prompts.strip():
+                    raise UserError("Prompt cannot be an empty string.")
                 if isinstance(prompts, list) and len(prompts) == 0:
                     raise UserError("Prompts list cannot be empty.")
 
@@ -243,8 +204,8 @@ class UnifiedLLMHandler:
                 )
 
                 if batch_mode:
+                    # Only openai:* models support the batch API
                     if not isinstance(model_instance, OpenAIModel):
-                        # Raise so tests can catch with pytest.raises(UserError)
                         raise UserError("Batch API mode is only supported for openai:* models.")
                     batch_result = await self._process_batch(agent, prompts, response_type)
                     return UnifiedResponse(success=True, data=batch_result)
@@ -258,7 +219,7 @@ class UnifiedLLMHandler:
                 return UnifiedResponse(success=True, data=data)
 
             except UserError as exc:
-                # RE-RAISE so that tests with pytest.raises(UserError) succeed!
+                # Re-raise so tests with pytest.raises(UserError) succeed.
                 logfire.log("error", "Caught user error", attributes={"error": str(exc)})
                 raise
             except Exception as exc:
