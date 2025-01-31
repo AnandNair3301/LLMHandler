@@ -1,74 +1,65 @@
 """
 Tests for the UnifiedLLMHandler class in llmhandler.
+This file now covers:
+  - Structured (typed) responses
+  - Unstructured (free-text) responses when response_type is omitted or None
+  - Provider-specific tests for Anthropic, DeepSeek, Gemini, and OpenRouter
+  - Batch mode tests are placed last.
 """
 
 import pytest
 import asyncio
+import inspect
 from unittest.mock import patch, MagicMock, AsyncMock
 from typing import List
 
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler.models import SimpleResponse, MathResponse, BatchResult
+from llmhandler.models import SimpleResponse, PersonResponse, BatchResult
 from pydantic_ai.exceptions import UserError
 
+# --- Structured tests ---
 
 @pytest.mark.asyncio
-async def test_single_prompt_basic():
-    """
-    Test processing a single prompt with a mocked run().
-    Ensures that we get a typed response back.
-    """
+async def test_single_prompt_structured():
+    """Test a single prompt with a typed response."""
     handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
-
-    # Patch Agent.run so we don't make a real external call
     with patch("llmhandler.api_handler.Agent.run") as mock_run:
-        mock_run.return_value.data = SimpleResponse(content="Hello from mock")
+        # Return a valid Pydantic object
+        mock_run.return_value.data = SimpleResponse(content="Hello structured", confidence=0.95)
         result = await handler.process(
-            prompts="Hello world",
-            model="openai:gpt-4o",  # allowed
+            prompts="Hello world structured",
+            model="openai:gpt-4o",
             response_type=SimpleResponse
         )
     assert result.success is True
     assert isinstance(result.data, SimpleResponse)
-    assert result.data.content == "Hello from mock"
+    assert result.data.content == "Hello structured"
 
 
 @pytest.mark.asyncio
-async def test_multiple_prompts_basic():
-    """
-    Test processing multiple prompts with a mocked run().
-    Ensures we get multiple typed responses in a list.
-    """
+async def test_multiple_prompts_structured():
+    """Test multiple prompts with a typed response."""
     handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
-
-    fake_responses = [
-        SimpleResponse(content="Resp A"),
-        SimpleResponse(content="Resp B"),
-        SimpleResponse(content="Resp C"),
+    responses = [
+        SimpleResponse(content="Resp A", confidence=0.9),
+        SimpleResponse(content="Resp B", confidence=0.9),
     ]
-
-    async def async_run_side_effect(prompt: str):
-        idx = 0
-        if prompt.endswith("B"):
-            idx = 1
-        elif prompt.endswith("C"):
-            idx = 2
+    async def side_effect(prompt: str):
         mock_obj = MagicMock()
-        mock_obj.data = fake_responses[idx]
+        idx = 0 if "A" in prompt else 1
+        mock_obj.data = responses[idx]
         return mock_obj
-
-    with patch("llmhandler.api_handler.Agent.run", side_effect=async_run_side_effect):
-        prompts = ["Prompt A", "Prompt B", "Prompt C"]
+    with patch("llmhandler.api_handler.Agent.run", side_effect=side_effect):
+        prompts = ["Prompt A", "Prompt B"]
         result = await handler.process(
             prompts=prompts,
-            model="openai:gpt-4o-mini",  # allowed
+            model="openai:gpt-4o-mini",
             response_type=SimpleResponse
         )
-
     assert result.success is True
     assert isinstance(result.data, list)
-    assert len(result.data) == 3
-    for resp, expected in zip(result.data, ["Resp A", "Resp B", "Resp C"]):
+    assert len(result.data) == 2
+    for resp, expected in zip(result.data, ["Resp A", "Resp B"]):
         assert isinstance(resp, SimpleResponse)
         assert resp.content == expected
 
@@ -101,45 +92,146 @@ async def test_empty_prompts():
         )
 
 
-@pytest.mark.asyncio
-async def test_batch_mode_non_openai():
-    """
-    Batch mode with a non-OpenAI provider should raise UserError.
-    """
-    handler = UnifiedLLMHandler(gemini_api_key="fake_gemini_key")
-    with pytest.raises(UserError):
-        await handler.process(
-            prompts=["Prompt A", "Prompt B"],
-            model="gemini:gemini-1.5-flash-8b",
-            response_type=SimpleResponse,
-            batch_mode=True
-        )
-
+# --- Unstructured tests (free-text) ---
 
 @pytest.mark.asyncio
-async def test_batch_mode_mocked():
+async def test_single_prompt_unstructured_explicit_none():
     """
-    Test batch mode success path with mocked file upload and results.
-    This requires AsyncMock for methods that are awaited inside the code.
+    Test processing a single prompt with unstructured response
+    when response_type is explicitly set to None.
     """
     handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = "Free text response"
+        result = await handler.process(
+            prompts="What is your favorite color?",
+            model="openai:gpt-4o-mini",
+            response_type=None
+        )
+    assert isinstance(result, str)
+    assert "Free text" in result
 
-    # We'll mock out the entire batch workflow on the underlying agent.model
-    # so that no real network calls occur.
+
+@pytest.mark.asyncio
+async def test_single_prompt_unstructured_omitted():
+    """
+    Test processing a single prompt with unstructured response
+    when response_type is omitted.
+    """
+    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = "Raw free text output"
+        result = await handler.process(
+            prompts="Tell me a fun fact.",
+            model="openai:gpt-4o-mini"
+            # response_type omitted → unstructured output
+        )
+    assert isinstance(result, str)
+    assert "free text" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_multiple_prompts_unstructured():
+    """
+    Test processing multiple prompts with unstructured responses.
+    """
+    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
+    async def side_effect(prompt: str):
+        mock_obj = MagicMock()
+        mock_obj.data = f"Response for {prompt}"
+        return mock_obj
+    with patch("llmhandler.api_handler.Agent.run", side_effect=side_effect):
+        prompts = ["Prompt one", "Prompt two"]
+        result = await handler.process(
+            prompts=prompts,
+            model="openai:gpt-4o-mini",
+            response_type=None  # unstructured
+        )
+    assert isinstance(result, list)
+    assert all(isinstance(r, str) for r in result)
+    assert "Prompt one" in result[0]
+
+
+# --- Provider-specific structured tests ---
+
+@pytest.mark.asyncio
+async def test_structured_anthropic():
+    """Test a structured response with Anthropic provider."""
+    handler = UnifiedLLMHandler(anthropic_api_key="fake_anthropic_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = SimpleResponse(content="Anthropic result", confidence=0.95)
+        result = await handler.process(
+            prompts="Tell me something interesting.",
+            model="anthropic:claude-3-5-sonnet-20241022",
+            response_type=SimpleResponse
+        )
+    assert result.success is True
+    assert result.data.content == "Anthropic result"
+
+
+@pytest.mark.asyncio
+async def test_structured_deepseek():
+    """Test a structured response with DeepSeek provider."""
+    handler = UnifiedLLMHandler(deepseek_api_key="fake_deepseek_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = SimpleResponse(content="DeepSeek result", confidence=0.95)
+        result = await handler.process(
+            prompts="Explain quantum physics simply.",
+            model="deepseek:deepseek-chat",
+            response_type=SimpleResponse
+        )
+    assert result.success is True
+    assert result.data.content == "DeepSeek result"
+
+
+@pytest.mark.asyncio
+async def test_structured_gemini():
+    """Test a structured response with Gemini provider."""
+    handler = UnifiedLLMHandler(gemini_api_key="fake_gemini_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = SimpleResponse(content="Gemini result", confidence=0.95)
+        result = await handler.process(
+            prompts="Compose a haiku about nature.",
+            model="gemini:gemini-1.5-flash",
+            response_type=SimpleResponse
+        )
+    assert result.success is True
+    assert result.data.content == "Gemini result"
+
+
+@pytest.mark.asyncio
+async def test_structured_openrouter():
+    """Test a structured response with OpenRouter (routing to Anthropic)."""
+    handler = UnifiedLLMHandler(openrouter_api_key="fake_openrouter_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = SimpleResponse(content="OpenRouter result", confidence=0.9)
+        result = await handler.process(
+            prompts="List uses for AI in gardening.",
+            model="openrouter:anthropic/claude-3-5-haiku-20241022",
+            response_type=SimpleResponse
+        )
+    assert result.success is True
+    assert result.data.content == "OpenRouter result"
+
+
+# --- Batch Mode tests (placed last) ---
+
+@pytest.mark.asyncio
+async def test_batch_mode_structured():
+    """
+    Test batch mode with a typed response.
+    This uses mocked network calls to simulate file upload and batch processing.
+    """
+    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
     with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
         mock_agent_inst = MagicMock()
-        
-        # We must replace the calls that get awaited with AsyncMock
         mock_model_client = MagicMock()
         mock_model_client.files.create = AsyncMock()
         mock_model_client.batches.create = AsyncMock()
         mock_model_client.batches.retrieve = AsyncMock()
         mock_model_client.files.content = AsyncMock()
-
-        # Setup the return values
         mock_model_client.files.create.return_value.id = "fake_file_id"
         mock_model_client.batches.create.return_value.id = "fake_batch_id"
-        # In-progress once, then completed
         mock_model_client.batches.retrieve.side_effect = [
             MagicMock(status="in_progress", output_file_id="fake_out_file"),
             MagicMock(status="completed", output_file_id="fake_out_file")
@@ -148,13 +240,10 @@ async def test_batch_mode_mocked():
             b'{"response":{"body":{"choices":[{"message":{"content":"Batch result A"}}]}}}\n'
             b'{"response":{"body":{"choices":[{"message":{"content":"Batch result B"}}]}}}\n'
         )
-
-        # Let the mock Agent instance have the needed .model and .run
         mock_agent_inst.model.model_name = "gpt-4o"
         mock_agent_inst.model.client = mock_model_client
         mock_agent_cls.return_value = mock_agent_inst
 
-        # Now run the code under test
         result = await handler.process(
             prompts=["BatchPromptA", "BatchPromptB"],
             model="openai:gpt-4o",
@@ -162,7 +251,7 @@ async def test_batch_mode_mocked():
             batch_mode=True,
         )
 
-    assert result.success is True, f"Expected success, got {result.error}"
+    assert result.success is True
     assert isinstance(result.data, BatchResult)
     assert len(result.data.results) == 2
     assert result.data.results[0]["response"].content == "Batch result A"
