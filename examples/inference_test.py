@@ -47,7 +47,17 @@ async def main():
     print("OpenAI unstructured (None) result:")
     print(unstructured_none)
 
-    # --- 4. Structured Usage: Multiple Prompts ---
+    # --- 4. Explicit non-Pydantic type usage (str) ---
+    print("\n=== Explicit non-Pydantic (str) Usage ===")
+    explicit_str = await handler.process(
+        prompts="Tell me a joke.",
+        model="openai:gpt-4o-mini",
+        response_type=str
+    )
+    print("Explicit str type result:")
+    print(explicit_str)
+
+    # --- 5. Structured Usage: Multiple Prompts ---
     print("\n=== Multiple Prompts Structured Usage ===")
     multi_structured = await handler.process(
         prompts=[
@@ -60,7 +70,7 @@ async def main():
     print("Multiple structured result:")
     print(multi_structured)
 
-    # --- 5. Batch Mode (Structured) ---
+    # --- 6. Batch Mode (Structured) ---
     print("\n=== Batch Mode Structured Usage ===")
     batch_structured = await handler.process(
         prompts=[
@@ -74,7 +84,7 @@ async def main():
     print("Batch mode structured result:")
     print(batch_structured)
 
-    # --- 6. Provider-specific Examples ---
+    # --- 7. Provider-specific Examples ---
     print("\n=== Provider-specific Examples ===")
 
     # Anthropic

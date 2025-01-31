@@ -1,10 +1,13 @@
 """
 Tests for the UnifiedLLMHandler class in llmhandler.
 This file now covers:
-  - Structured (typed) responses
+  - Structured (typed) responses (single and multiple prompts)
   - Unstructured (free-text) responses when response_type is omitted or None
   - Provider-specific tests for Anthropic, DeepSeek, Gemini, and OpenRouter
-  - Batch mode tests are placed last.
+  - Batch mode tests for structured responses (placed last)
+  - Additional tests for:
+      a) Batch mode used with unstructured output (should raise error)
+      b) Explicitly passing a non-Pydantic type (str) as response_type
 """
 
 import pytest
@@ -14,8 +17,9 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from typing import List
 
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler.models import SimpleResponse, PersonResponse, BatchResult
+from llmhandler.models import SimpleResponse, PersonResponse, BatchResult, UnifiedResponse
 from pydantic_ai.exceptions import UserError
+
 
 # --- Structured tests ---
 
@@ -152,6 +156,26 @@ async def test_multiple_prompts_unstructured():
     assert "Prompt one" in result[0]
 
 
+# --- Explicit non-Pydantic type usage ---
+
+@pytest.mark.asyncio
+async def test_single_prompt_with_str_as_response_type():
+    """
+    Test that if the user explicitly passes 'str' as the response_type,
+    the handler returns unstructured free text.
+    """
+    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
+    with patch("llmhandler.api_handler.Agent.run") as mock_run:
+        mock_run.return_value.data = "Raw text response"
+        result = await handler.process(
+            prompts="What is the meaning of life?",
+            model="openai:gpt-4o-mini",
+            response_type=str  # Explicitly passing str should be treated as unstructured
+        )
+    assert isinstance(result, str)
+    assert "Raw text" in result
+
+
 # --- Provider-specific structured tests ---
 
 @pytest.mark.asyncio
@@ -256,3 +280,19 @@ async def test_batch_mode_structured():
     assert len(result.data.results) == 2
     assert result.data.results[0]["response"].content == "Batch result A"
     assert result.data.results[1]["response"].content == "Batch result B"
+
+
+@pytest.mark.asyncio
+async def test_batch_mode_unstructured_raises_error():
+    """
+    Test that attempting to use batch mode with unstructured output (no Pydantic model)
+    raises a UserError.
+    """
+    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
+    with pytest.raises(UserError):
+        await handler.process(
+            prompts=["BatchPromptX", "BatchPromptY"],
+            model="openai:gpt-4o-mini",
+            response_type=None,  # unstructured output
+            batch_mode=True
+        )
