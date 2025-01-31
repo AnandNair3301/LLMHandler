@@ -1,12 +1,12 @@
 [project]
 name = "llmhandler"
 version = "0.1.0"
-description = "x"
+description = "LLMHandler is a unified Python package that provides a single, consistent interface for interacting with multiple LLM providers, offering both structured (typed) and unstructured responses."
 authors = [
     {name = "Bryan Nsoh", email = "bryan.anye.5@gmail.com"},
 ]
 dependencies = ["pydantic>=2.10.6", "aiolimiter>=1.2.1", "pydantic-ai>=0.0.20", "python-dotenv>=1.0.1", "logfire>=3.4.0"]
-requires-python = ">=3.13"
+requires-python = ">=3.8"
 readme = "README.md"
 license = {text = "MIT"}
 
@@ -30,3 +30,4 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
+
