@@ -343,7 +343,7 @@ class UnifiedLLMHandler:
                     data = json.loads(line)
                     try:
                         content = data["response"]["body"]["choices"][0]["message"]["content"]
-                        r = response_type.construct()
+                        r = response_type.model_construct()
                         if "content" in response_type.model_fields:
                             setattr(r, "content", content)
                         if "confidence" in response_type.model_fields:

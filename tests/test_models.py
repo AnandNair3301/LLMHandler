@@ -3,7 +3,7 @@ Tests for the Pydantic models in llmhandler.
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from llmhandler.models import (
     BatchMetadata,
     BatchResult,
@@ -43,7 +43,7 @@ def test_person_response_model():
 
 def test_batch_metadata_model():
     """Test creating a BatchMetadata instance."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     bm = BatchMetadata(
         batch_id="batch123",
         input_file_id="fileXYZ",

@@ -27,3 +27,6 @@ dev = [
     "loguru>=0.7.3",
     "pytest-asyncio>=0.25.3",
 ]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
