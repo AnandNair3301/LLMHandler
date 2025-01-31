@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler.models import SimpleResponse, PersonResponse
+from llmhandler._internal_models import SimpleResponse, PersonResponse
+
 
 async def main():
     handler = UnifiedLLMHandler()

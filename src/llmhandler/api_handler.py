@@ -36,7 +36,7 @@ from pydantic_ai.models.vertexai import VertexAIModel
 from pydantic_ai.exceptions import UserError
 
 # Import your shared data models from models.py
-from .models import (
+from ._internal_models import (
     BatchMetadata,
     BatchResult,
     SimpleResponse,
@@ -44,6 +44,7 @@ from .models import (
     PersonResponse,
     UnifiedResponse,
 )
+
 
 # Configure logfire (optional)
 logfire.configure(send_to_logfire="if-token-present")

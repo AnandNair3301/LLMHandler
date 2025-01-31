@@ -4,7 +4,7 @@ Tests for the Pydantic models in llmhandler.
 
 import pytest
 from datetime import datetime, timezone
-from llmhandler.models import (
+from llmhandler._internal_models import (
     BatchMetadata,
     BatchResult,
     SimpleResponse,
@@ -12,6 +12,7 @@ from llmhandler.models import (
     PersonResponse,
     UnifiedResponse,
 )
+
 
 
 def test_simple_response_model():

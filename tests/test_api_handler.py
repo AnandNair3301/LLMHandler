@@ -17,7 +17,14 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from typing import List
 
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler.models import SimpleResponse, PersonResponse, BatchResult, UnifiedResponse
+from llmhandler._internal_models import (
+    BatchMetadata,
+    BatchResult,
+    SimpleResponse,
+    MathResponse,
+    PersonResponse,
+    UnifiedResponse,
+)
 from pydantic_ai.exceptions import UserError
 
 
