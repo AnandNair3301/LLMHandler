@@ -12,8 +12,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse, PersonResponse
-
+from llmhandler._internal_models import SimpleResponse, PersonResponse, UnifiedResponse
 
 async def main():
     handler = UnifiedLLMHandler()
@@ -71,19 +70,36 @@ async def main():
     print("Multiple structured result:")
     print(multi_structured)
 
-    # --- 6. Batch Mode (Structured) ---
-    print("\n=== Batch Mode Structured Usage ===")
-    batch_structured = await handler.process(
-        prompts=[
-            "Write a short story about a dragon who loves sunsets.",
-            "Explain the top 5 health benefits of daily jogging in bullet points."
-        ],
+    # --- 6. Partial Failure Example (Real API Call) ---
+    print("\n=== Partial Failure Example (Real API Call) ===")
+    # Two good prompts and one extremely long (bad) prompt.
+    good_prompt = "Tell me a fun fact about penguins."
+    # Construct a bad prompt that far exceeds any realistic token limit.
+    # Here we repeat "word " 2,000,001 times (~2 million words).
+    bad_prompt = "word " * 2000001
+    another_good = "What are the benefits of regular exercise?"
+    partial_prompts = [good_prompt, bad_prompt, another_good]
+
+    partial_results = await handler.process(
+        prompts=partial_prompts,
         model="openai:gpt-4o-mini",
-        response_type=SimpleResponse,
-        batch_mode=True
+        response_type=SimpleResponse
     )
-    print("Batch mode structured result:")
-    print(batch_structured)
+    print("Partial Failure Real API Result:")
+    # The returned object is a UnifiedResponse whose data is a list of PromptResult objects.
+    if isinstance(partial_results, UnifiedResponse):
+        results_list = partial_results.data
+    else:
+        results_list = partial_results
+    for pr in results_list:
+        # Truncate the prompt display if it is very long
+        display_prompt = pr.prompt if len(pr.prompt) < 60 else pr.prompt[:60] + "..."
+        print(f"Prompt: {display_prompt}")
+        if pr.error:
+            print(f"  ERROR: {pr.error}")
+        else:
+            print(f"  Response: {pr.data}")
+        print("-" * 40)
 
     # --- 7. Provider-specific Examples ---
     print("\n=== Provider-specific Examples ===")
@@ -123,6 +139,20 @@ async def main():
     )
     print("OpenRouter structured result:")
     print(openrouter)
+
+    # --- 8. Batch Mode (Structured) ---
+    print("\n=== Batch Mode Structured Usage ===")
+    batch_structured = await handler.process(
+        prompts=[
+            "Write a short story about a dragon who loves sunsets.",
+            "Explain the top 5 health benefits of daily jogging in bullet points."
+        ],
+        model="openai:gpt-4o-mini",
+        response_type=SimpleResponse,
+        batch_mode=True
+    )
+    print("Batch mode structured result:")
+    print(batch_structured)
 
 if __name__ == "__main__":
     asyncio.run(main())

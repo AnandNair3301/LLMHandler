@@ -55,8 +55,7 @@ T = TypeVar("T")
 def _build_schema_instructions(response_type: Type[BaseModel]) -> str:
     """
     Generate system-prompt instructions telling the model
-    to respond exclusively in valid JSON that matches the provided
-    Pydantic model schema.
+    to respond exclusively in valid JSON that matches this schema.
     """
     schema_str = response_type.model_json_schema()
     return (
@@ -65,14 +64,22 @@ def _build_schema_instructions(response_type: Type[BaseModel]) -> str:
         "Do not include extraneous keys. Return ONLY valid JSON."
     )
 
+class PromptResult(BaseModel):
+    """
+    Stores the outcome of processing one prompt.
+      - prompt: the original input prompt
+      - data: the LLM response (typed or raw string) if successful
+      - error: an error string if something failed
+    """
+    prompt: str
+    data: Optional[Union[str, BaseModel]] = None
+    error: Optional[str] = None
+
+
 class UnifiedLLMHandler:
     """
     A unified handler for processing prompts with typed responses (when a Pydantic model is provided)
     or unstructured responses (when no model is provided).
-
-    - If a Pydantic model (subclass of BaseModel) is passed as `response_type`, JSON schema instructions
-      are automatically appended to the system prompt, and the response is validated.
-    - Otherwise, the LLM output is returned as free-form text.
     """
 
     def __init__(
@@ -156,14 +163,16 @@ class UnifiedLLMHandler:
         batch_mode: bool = False,
         retries: int = 1,
     ) -> Union[
-        UnifiedResponse[Union[T, List[T], BatchResult]],
+        UnifiedResponse[Union[T, List[T], BatchResult, List[PromptResult]]],
         str,
-        List[str]
+        List[str],
+        List[PromptResult]
     ]:
         """
         Process a prompt (or prompts) and return either:
          - A UnifiedResponse (with typed output) if `response_type` is a Pydantic model,
-         - Or raw text (str or list[str]) if no Pydantic model is provided.
+         - Or raw text (str or list[str]) if no Pydantic model is provided,
+         - Or a list of PromptResult if you have multiple prompts in partial-failure mode.
 
         If a Pydantic model is provided, JSON schema instructions are appended to the system prompt.
         Batch mode is allowed only when a typed model is used.
@@ -192,8 +201,8 @@ class UnifiedLLMHandler:
                     and issubclass(response_type, BaseModel)
                 )
 
+                # If typed, inject schema instructions into the system prompt.
                 if is_typed:
-                    # Automatically inject JSON schema instructions into the system prompt.
                     schema_instructions = _build_schema_instructions(response_type)
                     if isinstance(system_message, str):
                         system_message = [system_message, schema_instructions]
@@ -214,7 +223,7 @@ class UnifiedLLMHandler:
                         retries=retries,
                     )
 
-                # Batch mode: only available for typed output and OpenAI models.
+                # Batch mode is only valid for typed, openai-based usage
                 if batch_mode:
                     if not isinstance(model_instance, OpenAIModel):
                         raise UserError("Batch API mode is only supported for openai:* models.")
@@ -223,20 +232,23 @@ class UnifiedLLMHandler:
                     batch_result = await self._process_batch(agent, prompts, response_type)
                     return UnifiedResponse(success=True, data=batch_result)
 
-                # Single prompt
+                # SINGLE PROMPT
                 if isinstance(prompts, str):
                     result = await self._process_single(agent, prompts)
                     if is_typed:
                         return UnifiedResponse(success=True, data=result)
                     else:
                         return result
+
+                # MULTIPLE PROMPTS (partial-failure approach)
                 else:
-                    # Multiple prompts
-                    results = await self._process_multiple(agent, prompts, batch_size)
+                    multi_results = await self._process_multiple(agent, prompts, batch_size)
                     if is_typed:
-                        return UnifiedResponse(success=True, data=results)
+                        # Return them in a UnifiedResponse so user sees partial successes/failures
+                        return UnifiedResponse(success=True, data=multi_results)
                     else:
-                        return results
+                        # Return the list of PromptResult unwrapped
+                        return multi_results
 
             except UserError as exc:
                 raise
@@ -260,13 +272,18 @@ class UnifiedLLMHandler:
 
     async def _process_multiple(
         self, agent: Agent, prompts: List[str], batch_size: int
-    ) -> List[Any]:
-        results: List[Any] = []
+    ) -> List[PromptResult]:
+        """
+        Updated to allow partial success. Each prompt yields a PromptResult
+        with either data or error, so one failure won't spoil the entire set.
+        """
+        results: List[PromptResult] = []
         with logfire.span("process_multiple"):
             for i in range(0, len(prompts), batch_size):
                 batch = prompts[i : i + batch_size]
 
                 async def process_prompt(p: str) -> Any:
+                    # We do agent.run(p) and return the .data
                     if self.rate_limiter:
                         async with self.rate_limiter:
                             r = await agent.run(p)
@@ -274,8 +291,18 @@ class UnifiedLLMHandler:
                         r = await agent.run(p)
                     return r.data
 
-                chunk_results = await asyncio.gather(*(process_prompt(p) for p in batch))
-                results.extend(chunk_results)
+                # return_exceptions=True prevents "fail fast" if any prompt raises
+                chunk_results = await asyncio.gather(
+                    *(process_prompt(p) for p in batch),
+                    return_exceptions=True
+                )
+                for prompt_text, item in zip(batch, chunk_results):
+                    if isinstance(item, Exception):
+                        # Store the error
+                        results.append(PromptResult(prompt=prompt_text, error=str(item)))
+                    else:
+                        # Store the successful data
+                        results.append(PromptResult(prompt=prompt_text, data=item))
         return results
 
     async def _process_batch(
@@ -284,6 +311,10 @@ class UnifiedLLMHandler:
         prompts: List[str],
         response_type: Type[BaseModel],
     ) -> BatchResult:
+        """
+        The existing batch-mode approach for large-scale async calls
+        using the OpenAI 'files' & 'batches' endpoints.
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         batch_file = self.batch_output_dir / f"batch_{timestamp}.jsonl"
 

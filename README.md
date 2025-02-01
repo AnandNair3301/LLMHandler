@@ -1,8 +1,9 @@
+
 # LLMHandler
 
 **Unified LLM Interface with Typed & Unstructured Responses**
 
-LLMHandler is a Python package that provides a single, consistent interface to interact with multiple large language model (LLM) providers. It supports both structured (Pydantic‑validated) and unstructured free‑form responses, along with advanced features like rate limiting and batch processing.
+LLMHandler is a Python package that provides a single, consistent interface to interact with multiple large language model (LLM) providers. It supports both structured (Pydantic‑validated) and unstructured free‑form responses, along with advanced features like rate limiting, batch processing, and now **per‑prompt partial failure handling**.
 
 ---
 
@@ -19,6 +20,7 @@ LLMHandler is a Python package that provides a single, consistent interface to i
   - [Unstructured Response (Single Prompt)](#unstructured-response-single-prompt)
   - [Multiple Prompts (Structured)](#multiple-prompts-structured)
   - [Batch Processing Example](#batch-processing-example)
+  - [Partial Failure Example](#partial-failure-example)
 - [Advanced Features](#advanced-features)
 - [Testing](#testing)
 - [Development & Contribution](#development--contribution)
@@ -29,7 +31,7 @@ LLMHandler is a Python package that provides a single, consistent interface to i
 
 ## Overview
 
-LLMHandler unifies access to various LLM providers by letting you specify a model using a provider prefix (e.g. `openai:gpt-4o-mini`). The package automatically appends JSON schema instructions when a Pydantic model is provided to validate and parse responses. Alternatively, you can request unstructured free‑form text. Advanced features include batch processing and rate limiting.
+LLMHandler unifies access to various LLM providers by letting you specify a model using a provider prefix (e.g. `openai:gpt-4o-mini`). The package automatically appends JSON schema instructions when a Pydantic model is provided to validate and parse responses. Alternatively, you can request unstructured free‑form text. Advanced features include rate limiting, batch processing, and **partial failure handling** when processing multiple prompts.
 
 ---
 
@@ -46,6 +48,10 @@ LLMHandler unifies access to various LLM providers by letting you specify a mode
   
 - **Rate Limiting:**  
   Optionally control the number of requests per minute.
+  
+- **Partial-Failure Handling:**  
+  When multiple prompts are provided, each prompt is processed individually. If one prompt fails (for example, if the prompt exceeds the model’s token limit or is excessively long), its failure is captured in a dedicated result (a `PromptResult`) while the others succeed.  
+  **Example:** If you intentionally pass a prompt that repeats `"word "` 2,000,001 times (i.e. over two million words), it will exceed the provider’s maximum allowed input length and the error message from the API (e.g. a 400 error stating that the input is “too long”) will be returned in that prompt’s result. This lets you safely handle errors on a per‑prompt basis without aborting the entire call.
   
 - **Easy Configuration:**  
   Automatically load API keys and settings from a `.env` file.
@@ -204,6 +210,48 @@ async def batch_example():
 asyncio.run(batch_example())
 ```
 
+### Partial Failure Example
+
+When processing multiple prompts, LLMHandler processes each prompt independently. If one prompt fails (for example, if the prompt is extremely long), its error is captured and returned along with the successful responses.
+
+Below is an example that demonstrates this behavior. In this case, we deliberately send a “bad” prompt that repeats the word `"word "` **2,000,001 times** (approximately 2 million words) so that it exceeds the model’s token limit. The resulting output will include an error for that prompt while still returning responses for the other prompts.
+
+```python
+import asyncio
+from llmhandler.api_handler import UnifiedLLMHandler
+from llmhandler._internal_models import SimpleResponse
+
+async def partial_failure_example():
+    handler = UnifiedLLMHandler()
+    # Two good prompts and one extremely long (bad) prompt.
+    good_prompt = "Tell me a fun fact about penguins."
+    # Construct a bad prompt that far exceeds any realistic token limit.
+    # Here we repeat "word " 2,000,001 times (approximately 2 million words),
+    # which should trigger a token limit error.
+    bad_prompt = "word " * 2000001
+    another_good = "What are the benefits of regular exercise?"
+    partial_prompts = [good_prompt, bad_prompt, another_good]
+
+    result = await handler.process(
+        prompts=partial_prompts,
+        model="openai:gpt-4o-mini",
+        response_type=SimpleResponse
+    )
+    print("Partial Failure Real API Result:")
+    # The returned object is a UnifiedResponse whose data is a list of PromptResult objects.
+    results_list = result.data if isinstance(result, UnifiedResponse) else result
+    for pr in results_list:
+        display_prompt = pr.prompt if len(pr.prompt) < 60 else pr.prompt[:60] + "..."
+        print(f"Prompt: {display_prompt}")
+        if pr.error:
+            print(f"  ERROR: {pr.error}")
+        else:
+            print(f"  Response: {pr.data}")
+        print("-" * 40)
+
+asyncio.run(partial_failure_example())
+```
+
 ---
 
 ## Advanced Features
@@ -215,8 +263,11 @@ asyncio.run(batch_example())
   - Supply a Pydantic model as `response_type` for validated, structured output.  
   - Omit or set `response_type=None` to receive raw, unstructured text.
 
+- **Partial Failure Handling:**  
+  When multiple prompts are submitted, each prompt is processed independently. If one prompt fails (for example, if you submit a prompt that far exceeds the maximum token limit—as with a prompt containing over 2 million words), the error is captured in its corresponding result. You will receive a list of results where each item (a `PromptResult`) contains the original prompt along with either a valid response or an error message. This lets you handle failures on a per‑prompt basis without aborting the entire request.
+
 - **Troubleshooting:**  
-  Error messages (such as schema validation failures or misconfigured API keys) are clearly reported. Ensure your model strings follow the `<provider>:<model_name>` format exactly.
+  Error messages (such as schema validation failures, token limit errors, or overloaded service errors) are clearly reported in the `error` field of the UnifiedResponse or PromptResult. Make sure your model strings follow the `<provider>:<model_name>` format exactly.
 
 ---
 
