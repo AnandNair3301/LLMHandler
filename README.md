@@ -2,7 +2,7 @@
 
 **Unified LLM Interface with Typed & Unstructured Responses**
 
-LLMHandler is a Python package that provides a single, consistent interface to interact with multiple large language model (LLM) providers such as OpenAI, Anthropic, Gemini, DeepSeek, VertexAI, and OpenRouter. Whether you need validated, structured responses (using Pydantic models) or unstructured free-form text, LLMHandler makes it simple to integrate LLM capabilities into your projects.
+LLMHandler is a Python package that provides a single, consistent interface to interact with multiple large language model (LLM) providers. It supports both structured (Pydantic‑validated) and unstructured free‑form responses, along with advanced features like rate limiting and batch processing.
 
 ---
 
@@ -12,8 +12,14 @@ LLMHandler is a Python package that provides a single, consistent interface to i
 - [Features](#features)
 - [Installation](#installation)
 - [Configuration](#configuration)
-- [Quick Start](#quick-start)
-- [API Reference](#api-reference)
+- [Model Format](#model-format)
+- [Supported Providers and Their Models](#supported-providers-and-their-models)
+- [Usage Examples](#usage-examples)
+  - [Structured Response (Single Prompt)](#structured-response-single-prompt)
+  - [Unstructured Response (Single Prompt)](#unstructured-response-single-prompt)
+  - [Multiple Prompts (Structured)](#multiple-prompts-structured)
+  - [Batch Processing Example](#batch-processing-example)
+- [Advanced Features](#advanced-features)
 - [Testing](#testing)
 - [Development & Contribution](#development--contribution)
 - [License](#license)
@@ -23,26 +29,26 @@ LLMHandler is a Python package that provides a single, consistent interface to i
 
 ## Overview
 
-LLMHandler unifies access to various LLM providers by letting you specify a model using a provider prefix (e.g. `openai:gpt-4o-mini`). The package automatically appends JSON schema instructions when a Pydantic model is provided to validate and parse responses. Alternatively, you can request unstructured free-form text. Additional features include batch processing and optional rate limiting.
+LLMHandler unifies access to various LLM providers by letting you specify a model using a provider prefix (e.g. `openai:gpt-4o-mini`). The package automatically appends JSON schema instructions when a Pydantic model is provided to validate and parse responses. Alternatively, you can request unstructured free‑form text. Advanced features include batch processing and rate limiting.
 
 ---
 
 ## Features
 
-- **Multi-Provider Support:**  
-  Easily switch between providers (OpenAI, Anthropic, Gemini, DeepSeek, VertexAI, OpenRouter) using a simple model identifier.
+- **Multi‑Provider Support:**  
+  Switch easily between providers (OpenAI, Anthropic, Gemini, DeepSeek, Ollama, etc.) using a simple model identifier.
   
 - **Structured & Unstructured Responses:**  
-  Validate responses against Pydantic models (e.g. `SimpleResponse`, `PersonResponse`) or receive raw text.
+  Validate outputs using Pydantic models or receive raw text.
   
 - **Batch Processing:**  
-  Process multiple prompts in batch mode with results written to JSONL files.
+  Process multiple prompts together with results written to JSONL files.
   
 - **Rate Limiting:**  
   Optionally control the number of requests per minute.
   
 - **Easy Configuration:**  
-  Load API keys and other settings automatically from a `.env` file.
+  Automatically load API keys and settings from a `.env` file.
 
 ---
 
@@ -54,13 +60,11 @@ LLMHandler unifies access to various LLM providers by letting you specify a mode
 
 ### Using PDM
 
-Install dependencies with [PDM](https://pdm.fming.dev/):
-
 ```bash
 pdm install
 ```
 
-### Using Pip (once published to PyPI)
+### Using Pip (when available)
 
 ```bash
 pip install llmhandler
@@ -70,97 +74,149 @@ pip install llmhandler
 
 ## Configuration
 
-Create a `.env` file in your project’s root to store your API keys:
+Create a `.env` file in your project’s root and add your API keys:
 
 ```ini
-# .env
-OPENROUTER_API_KEY=your_openrouter_api_key
-DEEPSEEK_API_KEY=your_deepseek_api_key
 OPENAI_API_KEY=your_openai_api_key
-GEMINI_API_KEY=your_gemini_api_key
 ANTHROPIC_API_KEY=your_anthropic_api_key
+GEMINI_API_KEY=your_gemini_api_key
+OLLAMA_API_KEY=your_ollama_api_key
+DEEPSEEK_API_KEY=your_deepseek_api_key
 ```
 
 LLMHandler automatically loads these values at runtime.
 
 ---
 
-## Quick Start
+## Model Format
 
-Below is a simple example demonstrating both structured and unstructured usage:
+Every model is passed as a string in the form:
+
+```
+<provider>:<model_name>
+```
+
+- **Provider Prefix:** Identifies the integration class and loads the proper API key and settings.
+- **Model Name:** Often validated via a type alias (e.g. `KnownModelName`) to select the specific LLM.
+
+---
+
+## Supported Providers and Their Models
+
+| **Provider**  | **Prefix**           | **Supported Models** |
+|---------------|----------------------|----------------------|
+| **OpenAI**    | `openai:`            | **GPT‑4o Series:**<br>• `openai:gpt-4o`<br>• `openai:gpt-4o-2024-05-13`<br>• `openai:gpt-4o-2024-08-06`<br>• `openai:gpt-4o-2024-11-20`<br>• `openai:gpt-4o-audio-preview`<br>• `openai:gpt-4o-audio-preview-2024-10-01`<br>• `openai:gpt-4o-audio-preview-2024-12-17`<br>• `openai:gpt-4o-mini`<br>• `openai:gpt-4o-mini-2024-07-18`<br>• `openai:gpt-4o-mini-audio-preview`<br>• `openai:gpt-4o-mini-audio-preview-2024-12-17`<br><br>**o1 Series:**<br>• `openai:o1`<br>• `openai:o1-2024-12-17`<br>• `openai:o1-mini`<br>• `openai:o1-mini-2024-09-12`<br>• `openai:o1-preview`<br>• `openai:o1-preview-2024-09-12` |
+| **Anthropic** | `anthropic:`         | • `anthropic:claude-3-5-haiku-latest`<br>• `anthropic:claude-3-5-sonnet-latest`<br>• `anthropic:claude-3-opus-latest` |
+| **Gemini**    | `google-gla:`<br>(Generative Language API)<br>`google-vertex:`<br>(Vertex AI) | • `gemini-1.0-pro`<br>• `gemini-1.5-flash`<br>• `gemini-1.5-flash-8b`<br>• `gemini-1.5-pro`<br>• `gemini-2.0-flash-exp`<br>• `gemini-2.0-flash-thinking-exp-01-21`<br>• `gemini-exp-1206` |
+| **Ollama**    | `ollama:`            | Accepts any valid Ollama model. Common examples:<br>• `ollama:llama3.2`<br>• `ollama:llama3.2-vision`<br>• `ollama:llama3.3-70b-specdec`<br>(See [ollama.com/library](https://ollama.com/library)) |
+| **Deepseek**  | `deepseek:`          | • `deepseek:deepseek-chat` |
+
+*Note: For LLaMA-based models, Ollama (and providers like Groq, if available) are the primary options.*
+
+---
+
+## Usage Examples
+
+### Structured Response (Single Prompt)
 
 ```python
 import asyncio
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse, PersonResponse
+from llmhandler._internal_models import SimpleResponse
 
-async def main():
-    # Initialize the handler with your API key (or let it load from .env)
-    handler = UnifiedLLMHandler(openai_api_key="your_openai_api_key")
-
-    # Structured response (typed output)
-    structured = await handler.process(
+async def structured_example():
+    handler = UnifiedLLMHandler()  # API keys auto-loaded from .env
+    result = await handler.process(
         prompts="Generate a catchy marketing slogan for a coffee brand.",
         model="openai:gpt-4o-mini",
         response_type=SimpleResponse
     )
-    print("Structured result:", structured)
+    print("Structured Response:", result.data)
 
-    # Unstructured response (raw text output)
-    unstructured = await handler.process(
-        prompts="Tell me a fun fact about dolphins.",
-        model="openai:gpt-4o-mini"
-    )
-    print("Unstructured result:", unstructured)
-
-    # Multiple prompts with structured responses
-    multiple = await handler.process(
-        prompts=[
-            "Describe a 28-year-old engineer named Alice with 3 key skills.",
-            "Describe a 45-year-old pastry chef named Bob with 2 key skills."
-        ],
-        model="openai:gpt-4o-mini",
-        response_type=PersonResponse
-    )
-    print("Multiple structured results:", multiple)
-
-asyncio.run(main())
+asyncio.run(structured_example())
 ```
 
-For additional examples, see the [examples/inference_test.py](examples/inference_test.py) file.
+### Unstructured Response (Single Prompt)
+
+```python
+import asyncio
+from llmhandler.api_handler import UnifiedLLMHandler
+
+async def unstructured_example():
+    handler = UnifiedLLMHandler()
+    result = await handler.process(
+        prompts="Tell me a fun fact about dolphins.",
+        model="openai:gpt-4o-mini"
+        # No response_type provided: returns raw text.
+    )
+    print("Unstructured Response:", result)
+
+asyncio.run(unstructured_example())
+```
+
+### Multiple Prompts (Structured)
+
+```python
+import asyncio
+from llmhandler.api_handler import UnifiedLLMHandler
+from llmhandler._internal_models import SimpleResponse
+
+async def multiple_prompts_example():
+    handler = UnifiedLLMHandler()
+    prompts = [
+        "Generate a slogan for a coffee brand.",
+        "Create a tagline for a tea company."
+    ]
+    result = await handler.process(
+        prompts=prompts,
+        model="openai:gpt-4o-mini",
+        response_type=SimpleResponse
+    )
+    print("Multiple Structured Responses:", result.data)
+
+asyncio.run(multiple_prompts_example())
+```
+
+### Batch Processing Example
+
+```python
+import asyncio
+from llmhandler.api_handler import UnifiedLLMHandler
+from llmhandler._internal_models import SimpleResponse
+
+async def batch_example():
+    # Set a rate limit to avoid overwhelming the API
+    handler = UnifiedLLMHandler(requests_per_minute=60)
+    prompts = [
+        "Generate a slogan for a coffee brand.",
+        "Create a tagline for a tea company.",
+        "Write a catchphrase for a juice brand."
+    ]
+    # Use batch_mode=True to process multiple prompts together (structured responses only)
+    batch_result = await handler.process(
+        prompts=prompts,
+        model="openai:gpt-4o-mini",
+        response_type=SimpleResponse,
+        batch_mode=True
+    )
+    print("Batch Processing Result:", batch_result.data)
+
+asyncio.run(batch_example())
+```
 
 ---
 
-## API Reference
+## Advanced Features
 
-### UnifiedLLMHandler
+- **Batch Processing & Rate Limiting:**  
+  Initialize the handler with `requests_per_minute` to throttle calls. When processing a list of prompts, set `batch_mode=True` to handle them as a batch (supported only for structured responses).
 
-The primary class for processing prompts.
+- **Structured vs. Unstructured Responses:**  
+  - Supply a Pydantic model as `response_type` for validated, structured output.  
+  - Omit or set `response_type=None` to receive raw, unstructured text.
 
-#### Constructor Parameters
-
-- **API Keys:**  
-  `openai_api_key`, `openrouter_api_key`, `deepseek_api_key`, `anthropic_api_key`, `gemini_api_key`  
-  (These can be provided as arguments or loaded automatically from the `.env` file.)
-
-- **`requests_per_minute` (optional):**  
-  Set a rate limit for outgoing requests.
-
-- **`batch_output_dir` (optional):**  
-  Directory for saving batch output files (default: `"batch_output"`).
-
-#### Method: `process()`
-
-- **Parameters:**
-  - `prompts`: A single prompt (string) or a list of prompt strings.
-  - `model`: Model identifier with a provider prefix (e.g., `"openai:gpt-4o-mini"`).
-  - `response_type` (optional): A Pydantic model class for structured responses (e.g. `SimpleResponse`, `PersonResponse`). Omit or set to `None` for unstructured text.
-  - `system_message` (optional): Additional instructions for the system prompt.
-  - `batch_mode` (optional): Set to `True` to process multiple prompts in batch mode (supported only for structured responses using OpenAI models).
-  - `retries` (optional): Number of retry attempts for failed requests.
-
-- **Returns:**  
-  A `UnifiedResponse` object (when using a typed response) or a raw string (or list of strings) for unstructured output.
+- **Troubleshooting:**  
+  Error messages (such as schema validation failures or misconfigured API keys) are clearly reported. Ensure your model strings follow the `<provider>:<model_name>` format exactly.
 
 ---
 
@@ -176,7 +232,7 @@ pytest
 
 ## Development & Contribution
 
-Contributions are welcome! To set up the development environment:
+Contributions are welcome! To set up your development environment:
 
 1. **Clone the Repository:**
 
@@ -197,8 +253,7 @@ Contributions are welcome! To set up the development environment:
    pytest
    ```
 
-4. **Submit a Pull Request:**  
-   Make improvements or bug fixes and submit a PR.
+4. **Submit a Pull Request** with your improvements or bug fixes.
 
 ---
 
