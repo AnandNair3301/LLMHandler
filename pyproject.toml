@@ -9,6 +9,10 @@ dependencies = ["pydantic>=2.10.6", "aiolimiter>=1.2.1", "pydantic-ai>=0.0.20", 
 requires-python = ">=3.9"
 readme = "README.md"
 license = {text = "MIT"}
+urls = {
+    "Homepage": "https://github.com/BryanNsoh/LLMHandler",
+    "Source": "https://github.com/BryanNsoh/LLMHandler"
+}
 
 [build-system]
 requires = ["pdm-backend"]
