@@ -45,7 +45,6 @@ from ._internal_models import (
     UnifiedResponse,
 )
 
-
 # Configure logfire (optional)
 logfire.configure(send_to_logfire="if-token-present")
 
@@ -90,13 +89,25 @@ class UnifiedLLMHandler:
         openrouter_api_key: Optional[str] = None,
         deepseek_api_key: Optional[str] = None,
         anthropic_api_key: Optional[str] = None,
-        gemini_api_key: Optional[str] = None,
+        # Renamed to "google_gla_api_key" to align with docs for Generative Language API:
+        google_gla_api_key: Optional[str] = None,
+        # For Vertex AI usage:
+        google_vertex_service_account_file: Optional[str] = None,
+        google_vertex_region: Optional[str] = None,
+        google_vertex_project_id: Optional[str] = None,
     ):
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.openrouter_api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
         self.deepseek_api_key = deepseek_api_key or os.getenv("DEEPSEEK_API_KEY")
         self.anthropic_api_key = anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")
-        self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
+
+        # Generative Language API key (formerly "gemini_api_key"):
+        self.google_gla_api_key = google_gla_api_key or os.getenv("GEMINI_API_KEY")
+
+        # Optional credentials for Vertex AI usage:
+        self.google_vertex_service_account_file = google_vertex_service_account_file
+        self.google_vertex_region = google_vertex_region
+        self.google_vertex_project_id = google_vertex_project_id
 
         self.rate_limiter = (
             AsyncLimiter(requests_per_minute, 60) if requests_per_minute else None
@@ -121,6 +132,7 @@ class UnifiedLLMHandler:
             if not self.openai_api_key:
                 raise UserError("No OpenAI API key set. Provide openai_api_key= or set OPENAI_API_KEY.")
             return OpenAIModel(real_model_name, api_key=self.openai_api_key)
+
         elif provider == "openrouter":
             if not self.openrouter_api_key:
                 raise UserError("No OpenRouter API key set.")
@@ -129,6 +141,7 @@ class UnifiedLLMHandler:
                 base_url="https://openrouter.ai/api/v1",
                 api_key=self.openrouter_api_key,
             )
+
         elif provider == "deepseek":
             if not self.deepseek_api_key:
                 raise UserError("No DeepSeek API key set.")
@@ -137,19 +150,31 @@ class UnifiedLLMHandler:
                 base_url="https://api.deepseek.com",
                 api_key=self.deepseek_api_key,
             )
+
         elif provider == "anthropic":
             if not self.anthropic_api_key:
                 raise UserError("No Anthropic API key set.")
             return AnthropicModel(real_model_name, api_key=self.anthropic_api_key)
-        elif provider == "gemini":
-            if not self.gemini_api_key:
-                raise UserError("No Gemini API key set.")
-            return GeminiModel(real_model_name, api_key=self.gemini_api_key)
-        elif provider == "vertexai":
-            return VertexAIModel(real_model_name)
+
+        # Hobby (Generative Language) API for Gemini:
+        elif provider == "google-gla":
+            if not self.google_gla_api_key:
+                raise UserError("No Gemini API key set. Provide google_gla_api_key= or set GEMINI_API_KEY.")
+            return GeminiModel(real_model_name, api_key=self.google_gla_api_key)
+
+        # Vertex AI usage:
+        elif provider == "google-vertex":
+            return VertexAIModel(
+                real_model_name,
+                service_account_file=self.google_vertex_service_account_file,
+                region=self.google_vertex_region,
+                project_id=self.google_vertex_project_id,
+            )
+
         else:
             raise UserError(
-                f"Unrecognized provider prefix: {provider}. Must be one of: openai, openrouter, deepseek, anthropic, gemini, vertexai."
+                f"Unrecognized provider prefix: {provider}. Must be one of: "
+                "openai, openrouter, deepseek, anthropic, google-gla, google-vertex."
             )
 
     async def process(
@@ -250,7 +275,7 @@ class UnifiedLLMHandler:
                         # Return the list of PromptResult unwrapped
                         return multi_results
 
-            except UserError as exc:
+            except UserError:
                 raise
             except Exception as exc:
                 full_trace = traceback.format_exc()
@@ -283,7 +308,6 @@ class UnifiedLLMHandler:
                 batch = prompts[i : i + batch_size]
 
                 async def process_prompt(p: str) -> Any:
-                    # We do agent.run(p) and return the .data
                     if self.rate_limiter:
                         async with self.rate_limiter:
                             r = await agent.run(p)
@@ -291,17 +315,14 @@ class UnifiedLLMHandler:
                         r = await agent.run(p)
                     return r.data
 
-                # return_exceptions=True prevents "fail fast" if any prompt raises
                 chunk_results = await asyncio.gather(
                     *(process_prompt(p) for p in batch),
                     return_exceptions=True
                 )
                 for prompt_text, item in zip(batch, chunk_results):
                     if isinstance(item, Exception):
-                        # Store the error
                         results.append(PromptResult(prompt=prompt_text, error=str(item)))
                     else:
-                        # Store the successful data
                         results.append(PromptResult(prompt=prompt_text, data=item))
         return results
 

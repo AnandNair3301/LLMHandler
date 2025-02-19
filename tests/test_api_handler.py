@@ -33,7 +33,6 @@ async def test_single_prompt_structured():
     """Test a single prompt with a typed response."""
     handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
     with patch("llmhandler.api_handler.Agent.run") as mock_run:
-        # Return a valid Pydantic object
         fake_result = MagicMock()
         fake_result.data = SimpleResponse(content="Hello structured", confidence=0.95)
         mock_run.return_value = fake_result
@@ -68,12 +67,9 @@ async def test_multiple_prompts_structured():
             response_type=SimpleResponse
         )
     assert result.success is True
-    # When multiple prompts are used in typed mode, the data is wrapped in a UnifiedResponse.
-    # In this case our design returns a list of per-prompt results.
     assert isinstance(result.data, list)
     assert len(result.data) == 2
     for resp, expected in zip(result.data, ["Resp A", "Resp B"]):
-        # Each item should have a non-null data field.
         assert resp.data is not None
         assert resp.data.content == expected
 
@@ -101,7 +97,7 @@ async def test_empty_prompts():
     with pytest.raises(UserError):
         await handler.process(
             prompts="",
-            model="openai:gpt-4o",  # allowed
+            model="openai:gpt-4o",
             response_type=SimpleResponse
         )
 
@@ -142,7 +138,6 @@ async def test_single_prompt_unstructured_omitted():
         result = await handler.process(
             prompts="Tell me a fun fact.",
             model="openai:gpt-4o-mini"
-            # response_type omitted → unstructured output
         )
     assert isinstance(result, str)
     assert "free text" in result.lower()
@@ -163,9 +158,8 @@ async def test_multiple_prompts_unstructured():
         result = await handler.process(
             prompts=prompts,
             model="openai:gpt-4o-mini",
-            response_type=None  # unstructured
+            response_type=None
         )
-    # In unstructured mode for multiple prompts, our design returns a list of PromptResult objects.
     assert isinstance(result, list)
     assert all(hasattr(r, "prompt") for r in result)
     assert "Prompt one" in result[0].prompt
@@ -187,7 +181,7 @@ async def test_single_prompt_with_str_as_response_type():
         result = await handler.process(
             prompts="What is the meaning of life?",
             model="openai:gpt-4o-mini",
-            response_type=str  # Explicitly passing str should be treated as unstructured
+            response_type=str
         )
     assert isinstance(result, str)
     assert "Raw text" in result
@@ -230,16 +224,16 @@ async def test_structured_deepseek():
 
 
 @pytest.mark.asyncio
-async def test_structured_gemini():
-    """Test a structured response with Gemini provider."""
-    handler = UnifiedLLMHandler(gemini_api_key="fake_gemini_key")
+async def test_structured_google_gla():
+    """Test a structured response with 'google-gla' provider (Gemini hobby API)."""
+    handler = UnifiedLLMHandler(google_gla_api_key="fake_gemini_key")
     with patch("llmhandler.api_handler.Agent.run") as mock_run:
         fake = MagicMock()
         fake.data = SimpleResponse(content="Gemini result", confidence=0.95)
         mock_run.return_value = fake
         result = await handler.process(
             prompts="Compose a haiku about nature.",
-            model="gemini:gemini-1.5-flash",
+            model="google-gla:gemini-1.5-flash",
             response_type=SimpleResponse
         )
     assert result.success is True
@@ -279,12 +273,10 @@ async def test_batch_mode_structured():
         mock_model_client.files.content = AsyncMock()
         mock_model_client.files.create.return_value.id = "fake_file_id"
         mock_model_client.batches.create.return_value.id = "fake_batch_id"
-        # Simulate the batch status: first "in_progress", then "completed"
         mock_model_client.batches.retrieve.side_effect = [
             MagicMock(status="in_progress", output_file_id="fake_out_file"),
             MagicMock(status="completed", output_file_id="fake_out_file")
         ]
-        # Simulate file content (two lines, one per prompt)
         mock_model_client.files.content.return_value.content = (
             b'{"response":{"body":{"choices":[{"message":{"content":"Batch result A"}}]}}}\n'
             b'{"response":{"body":{"choices":[{"message":{"content":"Batch result B"}}]}}}\n'
@@ -307,21 +299,15 @@ async def test_batch_mode_structured():
     assert result.data.results[1]["response"].content == "Batch result B"
 
 
-# --- NEW: Partial Failure in Multiple Prompts Test ---
-
 @pytest.mark.asyncio
 async def test_partial_failure_multiple_prompts():
     """
     Test that when processing multiple prompts in regular (non-batch) mode,
-    a failing prompt (e.g. one exceeding the token limit) is captured as an error
-    in its PromptResult, while other prompts succeed.
+    a failing prompt is captured as an error in its PromptResult,
+    while other prompts succeed.
     """
     handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
 
-    # Simulate Agent.run so that:
-    # - For a prompt explicitly labeled "Bad prompt", raise an Exception
-    #   (simulate a token-limit error).
-    # - Otherwise, return a valid result.
     async def side_effect(prompt: str):
         if prompt == "Bad prompt":
             raise Exception("Token limit exceeded")
@@ -330,7 +316,6 @@ async def test_partial_failure_multiple_prompts():
             fake.data = SimpleResponse(content=f"Response for {prompt}", confidence=0.9)
             return fake
 
-    # Patch Agent.run using AsyncMock so that the asynchronous side_effect is properly awaited.
     with patch("llmhandler.api_handler.Agent.run", new_callable=AsyncMock, side_effect=side_effect):
         prompts = ["Good prompt", "Bad prompt", "Another good prompt"]
         result = await handler.process(
@@ -339,7 +324,6 @@ async def test_partial_failure_multiple_prompts():
             response_type=SimpleResponse
         )
 
-    # The result should be a UnifiedResponse wrapping a list of PromptResult objects.
     assert result.success is True
     multi_results = result.data
     assert isinstance(multi_results, list)
@@ -354,3 +338,34 @@ async def test_partial_failure_multiple_prompts():
             assert pr.data is not None
             assert pr.error is None
             assert pr.data.content == f"Response for {pr.prompt}"
+
+
+@pytest.mark.asyncio
+async def test_google_vertex_with_custom_credentials():
+    """
+    Test using google-vertex with optional credentials:
+    service_account_file, project_id, region.
+    We check that VertexAIModel is initialized with these values.
+    """
+    handler = UnifiedLLMHandler(
+        google_vertex_service_account_file="fake_sa.json",
+        google_vertex_region="us-west1",
+        google_vertex_project_id="my-vertex-proj"
+    )
+    with patch("llmhandler.api_handler.VertexAIModel") as mock_vertex_cls:
+        mock_vertex_inst = MagicMock()
+        mock_vertex_cls.return_value = mock_vertex_inst
+
+        # We don't actually call agent.run here; just verify the model instance is built.
+        await handler.process(
+            prompts="Test Vertex AI prompt",
+            model="google-vertex:gemini-1.5-flash",
+            response_type=SimpleResponse
+        )
+
+    mock_vertex_cls.assert_called_once_with(
+        "gemini-1.5-flash",
+        service_account_file="fake_sa.json",
+        region="us-west1",
+        project_id="my-vertex-proj",
+    )

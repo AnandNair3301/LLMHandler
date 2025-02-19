@@ -32,7 +32,6 @@ async def main():
     unstructured = await handler.process(
         prompts="Tell me a fun fact about dolphins.",
         model="openai:gpt-4o-mini"
-        # response_type omitted → unstructured output
     )
     print("OpenAI unstructured result:")
     print(unstructured)
@@ -74,9 +73,7 @@ async def main():
     print("\n=== Partial Failure Example (Real API Call) ===")
     # Two good prompts and one extremely long (bad) prompt.
     good_prompt = "Tell me a fun fact about penguins."
-    # Construct a bad prompt that far exceeds any realistic token limit.
-    # Here we repeat "word " 2,000,001 times (~2 million words).
-    bad_prompt = "word " * 2000001
+    bad_prompt = "word " * 2000001  # deliberately exceeding token limits
     another_good = "What are the benefits of regular exercise?"
     partial_prompts = [good_prompt, bad_prompt, another_good]
 
@@ -86,13 +83,11 @@ async def main():
         response_type=SimpleResponse
     )
     print("Partial Failure Real API Result:")
-    # The returned object is a UnifiedResponse whose data is a list of PromptResult objects.
     if isinstance(partial_results, UnifiedResponse):
         results_list = partial_results.data
     else:
         results_list = partial_results
     for pr in results_list:
-        # Truncate the prompt display if it is very long
         display_prompt = pr.prompt if len(pr.prompt) < 60 else pr.prompt[:60] + "..."
         print(f"Prompt: {display_prompt}")
         if pr.error:
@@ -122,10 +117,10 @@ async def main():
     print("DeepSeek structured result:")
     print(deepseek)
 
-    # Gemini
+    # Gemini via Generative Language API
     gemini = await handler.process(
         prompts="Compose a haiku about the sunrise.",
-        model="gemini:gemini-1.5-flash",
+        model="google-gla:gemini-1.5-flash",
         response_type=SimpleResponse
     )
     print("Gemini structured result:")
@@ -153,6 +148,7 @@ async def main():
     )
     print("Batch mode structured result:")
     print(batch_structured)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
