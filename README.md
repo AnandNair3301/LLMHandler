@@ -421,7 +421,6 @@ This will execute all tests (including integration and unit tests). Make sure yo
 4. **Publish to PyPI** (assuming you have permission and a valid account):
 
    ```bash
-   pdm version patch
    pdm build
    pdm publish
    ```
