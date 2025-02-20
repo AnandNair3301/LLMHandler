@@ -1,8 +1,14 @@
+Below is a **fully revised** README that addresses every nuanced question about **how the library returns responses**—particularly when multiple prompts are provided—and **clarifies that users are expected to define their own Pydantic models**. It explicitly shows how to handle the returned data **without** directly importing any “internal” classes.
+
+---
+
 # LLMHandler
 
 **Unified LLM Interface with Typed & Unstructured Responses**
 
-LLMHandler is a Python package (published on PyPI as **`llm_handler_validator`**) that provides a single, consistent interface to interact with multiple large language model (LLM) providers. It supports both **structured (Pydantic‑validated)** and **unstructured free‑form** responses, along with advanced features like **rate limiting**, **batch processing**, and **per‑prompt partial failure handling**.
+LLMHandler is a Python package (published on PyPI as **`llm_handler_validator`**) that provides a single, consistent interface to interact with multiple large language model (LLM) providers. **We do not ship “built-in” Pydantic models that you must reuse**—rather, **you define your own** according to the schema you desire, and **LLMHandler** enforces JSON output matching that schema. Alternatively, you can request **unstructured** responses.
+
+Key features include **rate limiting**, **batch processing** for OpenAI typed responses, and **per-prompt partial failure handling**—where multiple prompts return a list of results, each indicating success or error independently.
 
 ---
 
@@ -15,13 +21,15 @@ LLMHandler is a Python package (published on PyPI as **`llm_handler_validator`**
 - [Model Format](#model-format)
 - [Supported Providers and Their Models](#supported-providers-and-their-models)
 - [UnifiedLLMHandler Constructor](#unifiedllmhandler-constructor)
+- [Defining Your Own Models](#defining-your-own-models)
 - [Usage Examples](#usage-examples)
   - [Structured Response (Single Prompt)](#structured-response-single-prompt)
   - [Unstructured Response (Single Prompt)](#unstructured-response-single-prompt)
   - [Multiple Prompts (Structured)](#multiple-prompts-structured)
   - [Batch Processing Example](#batch-processing-example)
-  - [Partial Failure Example](#partial-failure-example)
+  - [Partial Failure Example (Multi-Prompt)](#partial-failure-example-multi-prompt)
   - [Vertex AI Usage Example](#vertex-ai-usage-example)
+- [How Responses Are Returned](#how-responses-are-returned)
 - [Advanced Features](#advanced-features)
 - [Testing](#testing)
 - [Development & Contribution](#development--contribution)
@@ -32,66 +40,66 @@ LLMHandler is a Python package (published on PyPI as **`llm_handler_validator`**
 
 ## Overview
 
-LLMHandler unifies access to various LLM providers by letting you specify a model using a **provider prefix** (e.g. `openai:gpt-4o-mini`). When a Pydantic model is provided, LLMHandler automatically appends JSON schema instructions to ensure the response is valid JSON matching your schema. If no model is provided, raw free‑form text is returned.
+LLMHandler unifies access to various LLM providers by letting you specify a model with a prefix (e.g., `openai:gpt-4o-mini`). **If you supply a Pydantic model**, LLMHandler instructs the LLM to return JSON conforming to that schema, then validates the response into your model. **If you omit a Pydantic model**, you get raw text.
 
 Additional capabilities include:
 
-- **Rate limiting**: Control requests/minute to avoid overloading APIs.
-- **Batch processing**: Send multiple prompts at once (OpenAI only).
-- **Partial failure handling**: If one prompt fails due to an API error or input that’s too large, that error is captured per prompt while other prompts still succeed.
+- **Rate limiting**: Control requests/minute to avoid hitting provider limits.
+- **Batch processing**: Bulk-handle multiple prompts for typed OpenAI calls.
+- **Partial failure**: If one prompt fails (e.g. token limit), that prompt’s error is captured, and the other prompts still succeed.
 
 ---
 
 ## Features
 
 1. **Multi-Provider Support**  
-   Easily switch between **OpenAI**, **Anthropic**, **Gemini** (Generative Language API or Vertex AI), **DeepSeek**, etc. by just changing the prefix in the model string.
+   Swap providers (OpenAI, Anthropic, Gemini, etc.) by changing the prefix in your model string.
 
-2. **Structured & Unstructured Responses**  
-   - **Structured**: Provide a Pydantic model for validated, strongly typed data.  
-   - **Unstructured**: Omit or pass `response_type=None` to get free-text strings.
+2. **Structured & Unstructured**  
+   - **Structured**: Provide a custom Pydantic model to parse the JSON response.  
+   - **Unstructured**: Skip the model (or set `response_type=None`) to receive free-text.
 
 3. **Batch Processing**  
-   For OpenAI typed responses, you can process multiple prompts in a single job, with results auto-written to JSONL files.
+   In typed mode for OpenAI, you can process multiple prompts in a single background job, with outputs stored to JSONL.
 
 4. **Rate Limiting**  
-   Avoid hitting provider rate limits by specifying a requests-per-minute value.
+   Just set `requests_per_minute=...`, and the library paces API calls accordingly.
 
-5. **Partial Failure Handling**  
-   When multiple prompts are processed, each prompt’s success or error is returned individually.
+5. **Per-Prompt Partial Failure**  
+   If you pass multiple prompts, each prompt’s success or failure stands alone. You see which prompts failed and which succeeded.
 
 6. **Easy Configuration**  
-   Reads keys from your local environment or `.env` file by default, or you can pass them directly when instantiating `UnifiedLLMHandler`.
+   Keys can be read from environment variables or `.env`, or you can pass them explicitly.
 
 ---
 
 ## Installation
 
-Because this package is published to PyPI as **`llm_handler_validator`**, you can install it via **pip**:
+Since the package is on PyPI as **`llm_handler_validator`**, you can install it via **pip**:
 
 ```bash
 pip install llm_handler_validator
 ```
 
-Or using **PDM** (which will add it to your `pyproject.toml` dependencies):
+**Or** if you use **PDM**, add it to your project with:
 
 ```bash
 pdm add llm_handler_validator
 ```
 
-If you are working from a cloned repository and have a local `pdm.lock` file, simply running:
+If you’ve cloned the repository and have a local `pdm.lock`, then:
 
 ```bash
 pdm install
 ```
 
-will install **this package** (from local source) and all its dependencies. PDM detects the project name (`llm_handler_validator`) from your local `pyproject.toml`.
+will install this package (as specified in `pyproject.toml`) plus dependencies.
 
 ---
 
 ## Configuration
 
-Create a `.env` file in your project’s root (or set environment variables in some other way). For example:
+Create a `.env` file in your project’s root, or set environment variables. For example:
 
 ```ini
 OPENAI_API_KEY=your_openai_api_key
@@ -100,26 +108,27 @@ GEMINI_API_KEY=your_google_gla_api_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
 ```
 
-*(If you plan to use Vertex AI, you can rely on application default credentials **OR** specify your own service account file, region, and project ID—see examples below.)*
+If you plan to use **Vertex AI** (`google-vertex:`), you can rely on application default credentials **or** specify a service account JSON, region, and project ID. (See the [Vertex AI Usage Example](#vertex-ai-usage-example).)
 
 ---
 
 ## Model Format
 
-Every model reference is a string:
+For each LLM request, you specify a **provider** and a **model name** in the format:
 
 ```
 <provider>:<model_name>
 ```
 
-- **Provider Prefix:** Tells LLMHandler which integration class to instantiate, e.g. `openai:`, `anthropic:`, `google-gla:`, `google-vertex:`, etc.
-- **Model Name:** The actual model ID to use (e.g. `gpt-4o-mini`, `gemini-2.0-flash`).
+Example:  
+- `openai:gpt-4o-mini`  
+- `anthropic:claude-3-5-haiku-latest`  
+- `google-gla:gemini-2.0-flash-001`  
+- `deepseek:deepseek-chat`
 
 ---
 
 ## Supported Providers and Their Models
-
-Below is a summary of recognized providers and example model names.
 
 ### OpenAI (`openai:`)
 
@@ -127,39 +136,23 @@ Below is a summary of recognized providers and example model names.
   - `openai:gpt-4o`  
   - `openai:gpt-4o-mini`
 
-- **o1 Series**  
+- **o1/o3 Series**  
   - `openai:o1`  
-  - `openai:o3-mini` 
+  - `openai:o3-mini`
 
 ### Anthropic (`anthropic:`)
+- e.g. `anthropic:claude-3-5-haiku-latest`
 
-- e.g.,  
-  - `anthropic:claude-3-5-haiku-latest`  
-  - `anthropic:claude-3-5-sonnet-latest`  
-  - `anthropic:claude-3-opus-latest`
-
-### Gemini  
-**Generative Language API** (`google-gla:`)  
-**Vertex AI** (`google-vertex:`)
-
-Valid Gemini model names:  
-- `gemini-2.0-flash`  
-- `gemini-2.0-flash-lite-preview-02-05`  
-- `gemini-2.0-flash-thinking-exp-01-21`  
-
+### Gemini
+- **Generative Language API** (`google-gla:`)  
+- **Vertex AI** (`google-vertex:`)  
+  - e.g. `google-vertex:gemini-2.0-flash-001`
 
 ### DeepSeek (`deepseek:`)
-
-- e.g.,  
-  - `deepseek:deepseek-chat`
+- e.g. `deepseek:deepseek-chat`
 
 ### Ollama (`ollama:`)
-
-- e.g.,  
-  - `ollama:llama3.2`  
-  - `ollama:llama3.3-70b-specdec`
-
-*(See [ollama.com/library](https://ollama.com/library) for more details.)*
+- e.g. `ollama:llama3.2`, etc.
 
 ---
 
@@ -180,36 +173,29 @@ class UnifiedLLMHandler(
 )
 ```
 
-1. **`requests_per_minute`**  
-   - An integer specifying how many requests per minute to allow.  
-   - If given, the class internally rate-limits outgoing requests to avoid surpassing provider limits.
+**Parameters**:
+- **`requests_per_minute`**: Rate limit for requests (integer).
+- **`batch_output_dir`**: Where JSONL results go in **batch mode** (OpenAI typed only).
+- **`openai_api_key`, `openrouter_api_key`, `deepseek_api_key`, `anthropic_api_key`, `google_gla_api_key`**: Optional overrides for environment-based API keys.
+- **`google_vertex_service_account_file`, `google_vertex_region`, `google_vertex_project_id`**: Credentials/config for Vertex AI usage. If omitted, you may rely on GCP default credentials.
 
-2. **`batch_output_dir`**  
-   - Directory path where JSONL results are written if you use **batch mode** (`batch_mode=True`) with OpenAI typed responses.  
-   - Defaults to `"batch_output"`.
+---
 
-3. **`openai_api_key`**  
-   - Explicitly pass your OpenAI API key if you do not wish to rely on the `OPENAI_API_KEY` environment variable.
+## Defining Your Own Models
 
-4. **`openrouter_api_key`**  
-   - API key for OpenRouter (which also wraps Anthropic, OpenAI, etc.).  
-   - If not given, we look for `OPENROUTER_API_KEY` in your environment.
+The point of LLMHandler is for **you to define your own Pydantic models** that describe the shape of data you want from the LLM. For example:
 
-5. **`deepseek_api_key`**  
-   - API key for DeepSeek. If not given, we look for `DEEPSEEK_API_KEY` in your environment.
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
 
-6. **`anthropic_api_key`**  
-   - API key for Anthropic. If not given, we look for `ANTHROPIC_API_KEY`.
+class MyCustomResponse(BaseModel):
+    title: str
+    summary: str
+    rating: Optional[float] = Field(None, ge=0, le=5)
+```
 
-7. **`google_gla_api_key`**  
-   - API key used for **Google’s Generative Language API** (often referred to as the “Gemini hobby” API).  
-   - If not given, we look for `GEMINI_API_KEY`.
-
-8. **`google_vertex_service_account_file`**, **`google_vertex_region`**, **`google_vertex_project_id`**  
-   - Optional credentials/configuration for **Vertex AI** usage. If you are running inside GCP, application default credentials may suffice.  
-   - If you need local dev or a custom service account, pass a path to the JSON file, the region (e.g. `"us-central1"`), and your GCP project ID.
-
-Any parameters left as `None` will attempt to load from environment variables (where relevant) or rely on defaults if the environment variables are missing.
+Then, when you call `process(..., response_type=MyCustomResponse)`, LLMHandler instructs the LLM: _“Return exclusively valid JSON matching MyCustomResponse”_ and parses it.
 
 ---
 
@@ -219,20 +205,30 @@ Any parameters left as `None` will attempt to load from environment variables (w
 
 ```python
 import asyncio
+from pydantic import BaseModel
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse
+
+# Define your own model
+class AdSlogan(BaseModel):
+    slogan: str
 
 async def structured_example():
     handler = UnifiedLLMHandler()
     result = await handler.process(
-        prompts="Generate a catchy marketing slogan for a coffee brand.",
+        prompts="Generate a short, clever slogan for a coffee brand.",
         model="openai:gpt-4o-mini",
-        response_type=SimpleResponse
+        response_type=AdSlogan
     )
-    print("Structured Response:", result.data)
+    if result.success:
+        # result.data is an AdSlogan instance
+        print("Structured Response:", result.data.slogan)
+    else:
+        print("Error:", result.error)
 
 asyncio.run(structured_example())
 ```
+
+In this example, we define a custom model named `AdSlogan`. We do **not** import anything from `_internal_models`. The LLM is told to produce a JSON object with a `slogan` field.
 
 ### Unstructured Response (Single Prompt)
 
@@ -242,12 +238,16 @@ from llmhandler.api_handler import UnifiedLLMHandler
 
 async def unstructured_example():
     handler = UnifiedLLMHandler()
+    # Without a Pydantic model, we get raw text
     result = await handler.process(
         prompts="Tell me a fun fact about dolphins.",
         model="openai:gpt-4o-mini"
-        # No response_type => returns raw text
     )
-    print("Unstructured Response:", result)
+    if isinstance(result, str):
+        print("Unstructured Response:", result)
+    else:
+        # Could also check for errors in a more advanced scenario
+        print("Unexpected or error:", result)
 
 asyncio.run(unstructured_example())
 ```
@@ -256,8 +256,11 @@ asyncio.run(unstructured_example())
 
 ```python
 import asyncio
+from pydantic import BaseModel
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse
+
+class ShortTagline(BaseModel):
+    tagline: str
 
 async def multiple_prompts_example():
     handler = UnifiedLLMHandler()
@@ -268,9 +271,18 @@ async def multiple_prompts_example():
     result = await handler.process(
         prompts=prompts,
         model="openai:gpt-4o-mini",
-        response_type=SimpleResponse
+        response_type=ShortTagline
     )
-    print("Multiple Structured Responses:", result.data)
+    # With multiple prompts, data is a list.
+    if result.success and isinstance(result.data, list):
+        for i, prompt_result in enumerate(result.data):
+            if prompt_result.error:
+                print(f"Prompt {i} had error:", prompt_result.error)
+            else:
+                # This is our ShortTagline instance
+                print(f"Prompt {i} => Tagline:", prompt_result.data.tagline)
+    else:
+        print("Error or unexpected data:", result)
 
 asyncio.run(multiple_prompts_example())
 ```
@@ -281,8 +293,11 @@ asyncio.run(multiple_prompts_example())
 
 ```python
 import asyncio
+from pydantic import BaseModel
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse
+
+class CatchPhrase(BaseModel):
+    phrase: str
 
 async def batch_example():
     handler = UnifiedLLMHandler(requests_per_minute=60)
@@ -294,20 +309,28 @@ async def batch_example():
     batch_result = await handler.process(
         prompts=prompts,
         model="openai:gpt-4o-mini",
-        response_type=SimpleResponse,
+        response_type=CatchPhrase,
         batch_mode=True
     )
-    print("Batch Processing Result:", batch_result.data)
+    # In batch mode, result.data is a BatchResult with metadata/results
+    if batch_result.success:
+        print("Batch metadata:", batch_result.data.metadata)
+        print("Results array:", batch_result.data.results)
+    else:
+        print("Batch error:", batch_result.error)
 
 asyncio.run(batch_example())
 ```
 
-### Partial Failure Example
+### Partial Failure Example (Multi-Prompt)
 
 ```python
 import asyncio
+from pydantic import BaseModel
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse
+
+class FunFact(BaseModel):
+    fact: str
 
 async def partial_failure_example():
     handler = UnifiedLLMHandler()
@@ -315,33 +338,39 @@ async def partial_failure_example():
     # Construct a 'bad' prompt that far exceeds typical token limits:
     bad_prompt = "word " * 2000001
     another_good = "What are the benefits of regular exercise?"
-    partial_prompts = [good_prompt, bad_prompt, another_good]
+    prompts = [good_prompt, bad_prompt, another_good]
 
     result = await handler.process(
-        prompts=partial_prompts,
+        prompts=prompts,
         model="openai:gpt-4o-mini",
-        response_type=SimpleResponse
+        response_type=FunFact
     )
-    print("Partial Failure Real API Result:")
-    # result.data is a list of per-prompt results
-    for pr in result.data:
-        display_prompt = pr.prompt if len(pr.prompt) < 60 else pr.prompt[:60] + "..."
-        if pr.error:
-            print(f"  ERROR: {pr.error}")
-        else:
-            print(f"  Response: {pr.data}")
+    # Here, result.data is likely a list. Each item has `.prompt`, `.data`, and `.error`.
+    if result.success and isinstance(result.data, list):
+        for i, prompt_result in enumerate(result.data):
+            print(f"Prompt {i}: {prompt_result.prompt[:50]}...")
+            if prompt_result.error:
+                print("  ERROR:", prompt_result.error)
+            else:
+                # This is our FunFact instance
+                print("  Fact:", prompt_result.data.fact)
+    else:
+        print("Overall error:", result.error)
 
 asyncio.run(partial_failure_example())
 ```
 
 ### Vertex AI Usage Example
 
-If you need to run Gemini models via **Vertex AI** (as opposed to the simpler “hobby” API with `google-gla:`), you can pass your service account JSON and region like so:
+If you want to run Gemini models via **Vertex AI** (instead of the simpler “hobby” `google-gla:` API), you can pass your service account JSON, region, and project ID:
 
 ```python
 import asyncio
+from pydantic import BaseModel
 from llmhandler.api_handler import UnifiedLLMHandler
-from llmhandler._internal_models import SimpleResponse
+
+class MLConcepts(BaseModel):
+    summary: str
 
 async def vertex_example():
     handler = UnifiedLLMHandler(
@@ -351,11 +380,11 @@ async def vertex_example():
     )
     result = await handler.process(
         prompts="Summarize advanced deep learning concepts.",
-        model="google-vertex:gemini-2.0-flash",  # Vertex AI usage
-        response_type=SimpleResponse
+        model="google-vertex:gemini-2.0-flash-001",
+        response_type=MLConcepts
     )
     if result.success:
-        print("Vertex AI Gemini response:", result.data)
+        print("Vertex AI Gemini response:", result.data.summary)
     else:
         print("Vertex AI error:", result.error)
 
@@ -364,34 +393,56 @@ asyncio.run(vertex_example())
 
 ---
 
+## How Responses Are Returned
+
+When you call `handler.process(...)`, you get back one of the following:
+
+1. **Single Prompt, Typed**:  
+   - If the call succeeds overall, `result.success` is `True` and `result.data` is **one instance** of your Pydantic model (e.g. `MyCustomResponse`).
+   - If the call fails (e.g. invalid API key), `result.success` is `False` and `result.error` explains why.
+
+2. **Single Prompt, Unstructured**:  
+   - Returns a **raw string** on success (the text from the LLM).
+   - Or if an error occurs, you get a library-defined error object (with `success=False`, etc.). In practice, check if `isinstance(result, str)`.
+
+3. **Multiple Prompts**:
+   - `result.data` is **a list** (one entry per prompt).
+   - Each entry has three fields:  
+     - `.prompt`: The text you passed,  
+     - `.data`: The typed object (if success) or the raw text (if untyped),  
+     - `.error`: A string if that single prompt failed (otherwise `None`).
+   - This allows partial failure. If some prompts exceed token limits, you get an error for those, but the rest succeed.
+
+**In short**: You typically just check `result.success`. If `result.data` is a list, loop over each item. If `result.data` is a single object, handle it directly.
+
+**Note**: We do *not* require you to import any internal class like `PromptResult`. You can simply treat each list item as an object with `.prompt`, `.error`, and `.data`.
+
+---
+
 ## Advanced Features
 
 1. **Batch Processing & Rate Limiting**  
-   - Initialize the handler with `requests_per_minute` to throttle requests.  
-   - For typed usage with **OpenAI**, pass `batch_mode=True` to process multiple prompts in a single job. Results get written to JSONL in your `batch_output_dir`.
+   - Use `requests_per_minute=...` to throttle calls.  
+   - For typed usage with **OpenAI**, pass `batch_mode=True` to run multiple prompts in a single job.
 
-2. **Structured vs. Unstructured**  
-   - Supply a Pydantic model as `response_type` to parse the response into typed fields.  
-   - Omit or set `response_type=None` to get raw text.
+2. **Partial Failure**  
+   - Each prompt in a multi-prompt list is independent; if one fails, it doesn’t kill the entire call.
 
-3. **Partial Failure Handling**  
-   - Submitting multiple prompts returns a list of results, one per prompt. If an API call fails for just one prompt, that prompt’s result includes an error, while others remain unaffected.
-
-4. **Google Gemini**  
-   - **`google-gla:`** prefix → “hobby” Generative Language API.  
-   - **`google-vertex:`** prefix → Vertex AI, recommended for production.
+3. **Google Gemini**  
+   - `google-gla:` prefix => Generative Language API (basic/hobby).  
+   - `google-vertex:` prefix => Vertex AI, recommended for production or advanced usage.
 
 ---
 
 ## Testing
 
-To run the test suite:
+You can run the test suite with:
 
 ```bash
 pdm run pytest
 ```
 
-This will execute all tests (including integration and unit tests). Make sure you have a valid `.env` (or environment variables) set if you want to test real API calls.
+If you have real API keys set in `.env`, some tests may attempt live calls unless mocked. Alternatively, you can rely on mocking in the library’s test suite.
 
 ---
 
@@ -404,13 +455,13 @@ This will execute all tests (including integration and unit tests). Make sure yo
    cd LLMHandler
    ```
 
-2. **Install Dependencies** (including dev dependencies and your local package):
+2. **Install Dependencies** (including dev dependencies and this local package):
 
    ```bash
    pdm install
    ```
 
-   > This command reads `pyproject.toml` and `pdm.lock`, installing the project (named `llm_handler_validator`) locally plus any dev tools (e.g. `pytest`).
+   This reads `pyproject.toml` & `pdm.lock` to set up an environment with everything needed (including `pytest`).
 
 3. **Run Tests**:
 
@@ -418,16 +469,16 @@ This will execute all tests (including integration and unit tests). Make sure yo
    pdm run pytest
    ```
 
-4. **Publish to PyPI** (assuming you have permission and a valid account):
+4. **Publish to PyPI** *(if you have permission and credentials)*:
 
    ```bash
    pdm build
    pdm publish
    ```
 
-   This will upload the built **`llm_handler_validator`** package to PyPI.
+   This uploads the wheel/SDist to PyPI under **`llm_handler_validator`**.
 
-5. **Submit a Pull Request** for any improvements or bug fixes.
+5. **Submit a Pull Request** if you have improvements or bug fixes.
 
 ---
 
