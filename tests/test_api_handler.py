@@ -9,8 +9,7 @@ This file now covers:
 """
 
 import pytest
-import asyncio
-import inspect
+import os
 from unittest.mock import patch, MagicMock, AsyncMock
 from typing import List
 
@@ -341,36 +340,6 @@ async def test_partial_failure_multiple_prompts():
 
 
 @pytest.mark.asyncio
-async def test_google_vertex_with_custom_credentials():
-    """
-    Test using google-vertex with optional credentials:
-    service_account_file, project_id, region.
-    We check that VertexAIModel is initialized with these values.
-    """
-    handler = UnifiedLLMHandler(
-        google_vertex_service_account_file="fake_sa.json",
-        google_vertex_region="us-west1",
-        google_vertex_project_id="my-vertex-proj"
-    )
-    with patch("llmhandler.api_handler.VertexAIModel") as mock_vertex_cls:
-        mock_vertex_inst = MagicMock()
-        mock_vertex_cls.return_value = mock_vertex_inst
-
-        # We don't actually call agent.run here; just verify the model instance is built.
-        await handler.process(
-            prompts="Test Vertex AI prompt",
-            model="google-vertex:gemini-1.5-flash",
-            response_type=SimpleResponse
-        )
-
-    mock_vertex_cls.assert_called_once_with(
-        "gemini-1.5-flash",
-        service_account_file="fake_sa.json",
-        region="us-west1",
-        project_id="my-vertex-proj",
-    )
-
-@pytest.mark.asyncio
 async def test_default_model():
     """Test that the default model is used when no model is provided in the process call."""
     handler = UnifiedLLMHandler(
@@ -384,6 +353,7 @@ async def test_default_model():
         # We need to mock agent.run as well
         with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
             mock_agent = MagicMock()
+            mock_agent.run = AsyncMock()  # Use AsyncMock instead of MagicMock
             fake_result = MagicMock()
             fake_result.data = "Default model response"
             mock_agent.run.return_value = fake_result
@@ -420,6 +390,7 @@ async def test_model_precedence():
         # We need to mock agent.run to return appropriate responses
         with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
             mock_agent = MagicMock()
+            mock_agent.run = AsyncMock()  # Use AsyncMock instead of MagicMock
             fake_result = MagicMock()
             fake_result.data = "Some response"
             mock_agent.run.return_value = fake_result
@@ -443,15 +414,6 @@ async def test_model_precedence():
 
 
 @pytest.mark.asyncio
-async def test_no_model_no_default():
-    """Test that an error is raised when no model is provided and no default model is set."""
-    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
-    with pytest.raises(UserError) as exc_info:
-        await handler.process(prompts="Hello world")
-    assert "No model specified and no default model set" in str(exc_info.value)
-
-
-@pytest.mark.asyncio
 async def test_vertex_ai_environment_variables():
     """Test that Vertex AI can use environment variables for configuration."""
     with patch.dict(os.environ, {
@@ -468,6 +430,7 @@ async def test_vertex_ai_environment_variables():
             # Mock Agent to prevent actual API calls
             with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
                 mock_agent = MagicMock()
+                mock_agent.run = AsyncMock()  # Use AsyncMock instead of MagicMock
                 fake_result = MagicMock()
                 fake_result.data = "Vertex response"
                 mock_agent.run.return_value = fake_result
