@@ -85,6 +85,7 @@ class UnifiedLLMHandler:
         self,
         requests_per_minute: Optional[int] = None,
         batch_output_dir: str = "batch_output",
+        default_model: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         deepseek_api_key: Optional[str] = None,
@@ -96,6 +97,23 @@ class UnifiedLLMHandler:
         google_vertex_region: Optional[str] = None,
         google_vertex_project_id: Optional[str] = None,
     ):
+        """
+        Initialize the UnifiedLLMHandler.
+
+        Args:
+            requests_per_minute: Optional rate limit for API calls
+            batch_output_dir: Directory to store batch processing files
+            default_model: Optional default model to use when no model is specified in process() calls
+            openai_api_key: Optional override for the OPENAI_API_KEY environment variable
+            openrouter_api_key: Optional override for the OPENROUTER_API_KEY environment variable
+            deepseek_api_key: Optional override for the DEEPSEEK_API_KEY environment variable
+            anthropic_api_key: Optional override for the ANTHROPIC_API_KEY environment variable
+            google_gla_api_key: Optional override for the GEMINI_API_KEY environment variable
+            google_vertex_service_account_file: Path to service account JSON file for Vertex AI
+            google_vertex_region: Region for Vertex AI (defaults to us-central1 if not specified)
+            google_vertex_project_id: Project ID for Vertex AI
+        """
+        self.default_model = default_model
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.openrouter_api_key = openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
         self.deepseek_api_key = deepseek_api_key or os.getenv("DEEPSEEK_API_KEY")
@@ -164,11 +182,22 @@ class UnifiedLLMHandler:
 
         # Vertex AI usage:
         elif provider == "google-vertex":
+            # Ensure we have some form of authentication
+            if not (self.google_vertex_service_account_file or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")):
+                raise UserError(
+                    "No Google Vertex AI credentials found. Either set google_vertex_service_account_file "
+                    "when instantiating the handler, or set the GOOGLE_APPLICATION_CREDENTIALS environment variable."
+                )
+            
+            # Use provided values or fall back to environment variables with sensible defaults
+            region = self.google_vertex_region or os.getenv("GOOGLE_VERTEX_REGION", "us-central1")
+            project_id = self.google_vertex_project_id or os.getenv("GOOGLE_VERTEX_PROJECT_ID")
+            
             return VertexAIModel(
                 real_model_name,
                 service_account_file=self.google_vertex_service_account_file,
-                region=self.google_vertex_region,
-                project_id=self.google_vertex_project_id,
+                region=region,
+                project_id=project_id,
             )
 
         else:
@@ -180,7 +209,7 @@ class UnifiedLLMHandler:
     async def process(
         self,
         prompts: Union[str, List[str]],
-        model: str,
+        model: Optional[str] = None,
         response_type: Optional[Type[T]] = None,
         *,
         system_message: Union[str, Sequence[str]] = (),
@@ -199,8 +228,20 @@ class UnifiedLLMHandler:
          - Or raw text (str or list[str]) if no Pydantic model is provided,
          - Or a list of PromptResult if you have multiple prompts in partial-failure mode.
 
-        If a Pydantic model is provided, JSON schema instructions are appended to the system prompt.
-        Batch mode is allowed only when a typed model is used.
+        Args:
+            prompts: The prompt or list of prompts to process
+            model: The model to use for processing. If None, the default_model will be used.
+            response_type: A Pydantic model to structure the response, or None for raw text
+            system_message: Optional system message to prefix to the prompt
+            batch_size: The number of prompts to process in a single batch
+            batch_mode: Whether to use batch mode for OpenAI processing
+            retries: Number of retries for failed requests
+
+        Returns:
+            Either a UnifiedResponse with typed data, raw text, or a list of PromptResult
+
+        Raises:
+            UserError: If neither model nor default_model is provided, or for other validation errors
         """
         with logfire.span("llm_processing"):
             original_prompt_for_error: Optional[str] = None
@@ -217,7 +258,12 @@ class UnifiedLLMHandler:
                 if isinstance(prompts, list) and len(prompts) == 0:
                     raise UserError("Prompts list cannot be empty.")
 
-                model_instance = self._build_model_instance(model)
+                # Use the provided model or fall back to default_model
+                model_to_use = model or self.default_model
+                if not model_to_use:
+                    raise UserError("No model specified and no default model set. Please provide a model.")
+
+                model_instance = self._build_model_instance(model_to_use)
 
                 # Check if we have a Pydantic model for typed responses.
                 is_typed = (

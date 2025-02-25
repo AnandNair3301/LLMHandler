@@ -369,3 +369,121 @@ async def test_google_vertex_with_custom_credentials():
         region="us-west1",
         project_id="my-vertex-proj",
     )
+
+@pytest.mark.asyncio
+async def test_default_model():
+    """Test that the default model is used when no model is provided in the process call."""
+    handler = UnifiedLLMHandler(
+        openai_api_key="fake_openai_key",
+        default_model="openai:gpt-4o-mini"
+    )
+    with patch("llmhandler.api_handler.UnifiedLLMHandler._build_model_instance") as mock_build:
+        mock_model = MagicMock()
+        mock_build.return_value = mock_model
+        
+        # We need to mock agent.run as well
+        with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
+            mock_agent = MagicMock()
+            fake_result = MagicMock()
+            fake_result.data = "Default model response"
+            mock_agent.run.return_value = fake_result
+            mock_agent_cls.return_value = mock_agent
+            
+            result = await handler.process(
+                prompts="Hello world",
+                # No model provided, should use default
+            )
+            
+    # Check that _build_model_instance was called with the default model
+    mock_build.assert_called_once_with("openai:gpt-4o-mini")
+    assert isinstance(result, str)
+    assert result == "Default model response"
+
+
+@pytest.mark.asyncio
+async def test_model_precedence():
+    """Test that a specified model takes precedence over the default model."""
+    handler = UnifiedLLMHandler(
+        openai_api_key="fake_openai_key",
+        default_model="openai:gpt-4o-mini"
+    )
+    
+    # Track which model is being used for each call
+    used_models = []
+    
+    def track_model(model_str):
+        used_models.append(model_str)
+        mock_model = MagicMock()
+        return mock_model
+    
+    with patch("llmhandler.api_handler.UnifiedLLMHandler._build_model_instance", side_effect=track_model):
+        # We need to mock agent.run to return appropriate responses
+        with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
+            mock_agent = MagicMock()
+            fake_result = MagicMock()
+            fake_result.data = "Some response"
+            mock_agent.run.return_value = fake_result
+            mock_agent_cls.return_value = mock_agent
+            
+            # First call with explicit model
+            await handler.process(
+                prompts="Hello world",
+                model="openai:gpt-4o",  # Should override default
+            )
+            
+            # Second call without model
+            await handler.process(
+                prompts="Hello again",
+                # No model provided, should use default
+            )
+    
+    # Check that the correct models were used in each call
+    assert used_models[0] == "openai:gpt-4o"  # First call used explicit model
+    assert used_models[1] == "openai:gpt-4o-mini"  # Second call used default model
+
+
+@pytest.mark.asyncio
+async def test_no_model_no_default():
+    """Test that an error is raised when no model is provided and no default model is set."""
+    handler = UnifiedLLMHandler(openai_api_key="fake_openai_key")
+    with pytest.raises(UserError) as exc_info:
+        await handler.process(prompts="Hello world")
+    assert "No model specified and no default model set" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_environment_variables():
+    """Test that Vertex AI can use environment variables for configuration."""
+    with patch.dict(os.environ, {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/fake_creds.json",
+        "GOOGLE_VERTEX_REGION": "us-west1",
+        "GOOGLE_VERTEX_PROJECT_ID": "test-project"
+    }):
+        handler = UnifiedLLMHandler()
+        
+        with patch("llmhandler.api_handler.VertexAIModel") as mock_vertex_cls:
+            mock_vertex_inst = MagicMock()
+            mock_vertex_cls.return_value = mock_vertex_inst
+            
+            # Mock Agent to prevent actual API calls
+            with patch("llmhandler.api_handler.Agent") as mock_agent_cls:
+                mock_agent = MagicMock()
+                fake_result = MagicMock()
+                fake_result.data = "Vertex response"
+                mock_agent.run.return_value = fake_result
+                mock_agent_cls.return_value = mock_agent
+                
+                # We just check that the model is built with correct params
+                await handler.process(
+                    prompts="Test Vertex AI with env vars",
+                    model="google-vertex:gemini-1.5-flash",
+                    response_type=SimpleResponse
+                )
+        
+        # Check that VertexAIModel was created with correct params from env
+        mock_vertex_cls.assert_called_once_with(
+            "gemini-1.5-flash",
+            service_account_file=None,  # Not directly passed, using env var
+            region="us-west1",
+            project_id="test-project",
+        )

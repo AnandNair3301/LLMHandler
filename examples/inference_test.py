@@ -134,20 +134,22 @@ async def main():
     )
     print("OpenRouter structured result:")
     print(openrouter)
-
+    
     # --- 8. Batch Mode (Structured) ---
-    print("\n=== Batch Mode Structured Usage ===")
-    batch_structured = await handler.process(
-        prompts=[
-            "Write a short story about a dragon who loves sunsets.",
-            "Explain the top 5 health benefits of daily jogging in bullet points."
-        ],
-        model="openai:gpt-4o-mini",
-        response_type=SimpleResponse,
-        batch_mode=True
-    )
-    print("Batch mode structured result:")
-    print(batch_structured)
+
+    # --- 9. Batch Mode (Structured) ---
+    # print("\n=== Batch Mode Structured Usage ===")
+    # batch_structured = await handler.process(
+    #     prompts=[
+    #         "Write a short story about a dragon who loves sunsets.",
+    #         "Explain the top 5 health benefits of daily jogging in bullet points."
+    #     ],
+    #     model="openai:gpt-4o-mini",
+    #     response_type=SimpleResponse,
+    #     batch_mode=True
+    # )
+    # print("Batch mode structured result:")
+    # print(batch_structured)
 
 
 if __name__ == "__main__":
